@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: patch
+  namespace: canon
+  author: Abdoul Aw
+  description: >-
+    One host's patch cycle - pre-flight assertions, a pinned-repo update, and a
+    reboot only when required. Batching, health gates and abort logic belong to
+    the calling play (see patch.yml), which keeps this role small and reusable.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - patching
+    - updates
+dependencies: []

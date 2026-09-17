@@ -1,0 +1,15 @@
+---
+# Database tier: extra kernel tuning and an extra package, layered on the role
+# defaults with the _extra variables.
+baseline_sysctl_extra:
+  vm.dirty_background_ratio: 5
+  vm.dirty_ratio: 10
+
+baseline_packages_extra:
+  - lsof
+
+service_name: postgresql
+# Databases are not behind the web load balancer; they have their own
+# failover procedure, so the LB drain step is skipped for them.
+drain_required: false
+health_check_cmd: "test -f /var/run/lab-app.healthy"

@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# The same six outcomes as not-idempotent.yml, written so a second run reports
+# zero changes. Each task number matches its broken twin.
+#
+#   tests/idempotence.sh examples/idempotence/idempotent.yml       # exits 0
+# =============================================================================
+- name: The same six jobs, idempotent
+  hosts: app01
+  gather_facts: false
+  handlers:
+    # 5. Restart only when NOTIFIED - i.e. only when the config really changed.
+    - name: Restart demo app
+      ansible.builtin.command: touch /var/run/demo-app.restarted
+      changed_when: true
+
+  tasks:
+    # 1. DECLARE the line, don't append it. `regexp` finds an existing setting
+    #    (any value) and replaces it; the line is added only if absent.
+    - name: 1 | Ensure the kernel parameter line
+      ansible.builtin.lineinfile:
+        path: /etc/sysctl.d/99-demo.conf
+        regexp: '^net\.core\.somaxconn\s*='
+        line: net.core.somaxconn = 1024
+        create: true
+        mode: "0644"
+
+    # 2. A MODULE that compares desired with actual state.
+    - name: 2 | Ensure the service user
+      ansible.builtin.user:
+        name: demo-svc
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+
+    # 3 + 4. The WHOLE file from a template-like block with no per-run values.
+    #    Deploy metadata belongs in the deploy log or a label, not in managed
+    #    content. One task owns the file, so there is no sed step at all.
+    - name: 3+4 | Render the app config (no timestamps, one owner)
+      ansible.builtin.copy:
+        dest: /etc/demo-app.conf
+        content: |
+          listen_port = 8080
+          log_level = info
+        mode: "0644"
+      notify: Restart demo app
+
+    # 6. `creates:` turns a command into a no-op once its result exists.
+    - name: 6 | Create the virtualenv once
+      ansible.builtin.command: python3 -m venv --without-pip /opt/demo-app/venv
+      args:
+        creates: /opt/demo-app/venv/bin/python3

@@ -1,0 +1,20 @@
+---
+# =============================================================================
+# site.yml - converge every Linux host to the baseline.
+#
+#   ansible-playbook site.yml                      # converge (enforce)
+#   ansible-playbook site.yml --check --diff       # detect drift, change nothing
+#   ansible-playbook site.yml --tags baseline_ssh  # just one section of the role
+#   ansible-playbook site.yml --limit canary       # one host first
+#
+# The playbook is deliberately short. All logic is in the role; all per-group
+# differences are in inventory/group_vars. That split is what makes the role
+# reusable: the same role version runs against web, db and app hosts - and on
+# containers, VMs or bare metal - with nothing but data changing.
+# =============================================================================
+
+- name: Converge Linux hosts to the platform baseline
+  hosts: linux
+  gather_facts: true
+  roles:
+    - role: baseline

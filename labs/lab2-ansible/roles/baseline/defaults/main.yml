@@ -1,0 +1,76 @@
+---
+# =============================================================================
+# baseline role - defaults
+#
+# Every variable the role reads is declared here, with the SAFE value, and is
+# prefixed `baseline_` so it can never collide with another role's variables.
+# Callers override these from inventory (group_vars / host_vars) or play vars -
+# never by editing the role. The full, validated contract is in
+# meta/argument_specs.yml.
+#
+# THE MERGE PATTERN used below (x and x_extra):
+# Ansible REPLACES dictionaries and lists at a higher precedence rather than
+# merging them. If group_vars/db.yml set `baseline_sysctl`, it would silently
+# drop every default key. So each collection has a base variable (owned by the
+# role) and an `_extra` variable (owned by the caller), combined in the tasks:
+#     baseline_sysctl | combine(baseline_sysctl_extra)
+#     baseline_packages + baseline_packages_extra
+# =============================================================================
+
+# --- Packages ----------------------------------------------------------------
+# state: present, never latest. A baseline must converge to the same result
+# every run; "latest" makes the same code produce different hosts on different
+# days. Upgrades are a deliberate, batched change - that is the patch role's job.
+baseline_packages:
+  - openssh-server
+  - chrony
+  - sudo
+  - procps-ng       # provides sysctl(8); minimal images ship without it
+baseline_packages_extra: []
+
+# --- Admin access ------------------------------------------------------------
+baseline_admin_group: ops
+# List of { name, key (optional public key), state (present|absent, default present) }.
+# Removing someone is `state: absent`, not deleting the entry - deleting the
+# entry would leave the account on every host (Ansible only manages what it is
+# told about).
+baseline_admin_users: []
+baseline_admin_sudo_nopasswd: false
+
+# --- SSH hardening -----------------------------------------------------------
+# Quoted strings on purpose: unquoted `no` in YAML is the boolean false.
+baseline_ssh_permit_root_login: "no"        # "no" | "prohibit-password" | "yes"
+baseline_ssh_password_authentication: false
+baseline_ssh_max_auth_tries: 3
+baseline_ssh_client_alive_interval: 300
+# Drop-in file name. It MUST sort before any vendor drop-in, because sshd uses
+# the FIRST value it reads. AlmaLinux 9 images ship 25-permitrootlogin.conf
+# with "PermitRootLogin yes"; a 50- or 99- file loses silently.
+baseline_ssh_dropin: /etc/ssh/sshd_config.d/10-baseline.conf
+
+# --- Time --------------------------------------------------------------------
+baseline_ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+
+# --- Kernel parameters -------------------------------------------------------
+baseline_sysctl:
+  net.ipv4.tcp_syncookies: 1
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.all.send_redirects: 0
+  kernel.dmesg_restrict: 1
+  vm.swappiness: 10
+baseline_sysctl_extra: {}
+# Load the values into the running kernel. Set false where the kernel is not
+# this host's to change (containers share the host kernel).
+baseline_sysctl_apply: true
+
+# --- Login banner ------------------------------------------------------------
+baseline_motd_owner: Platform Engineering
+baseline_motd_contact: platform@canon.example
+
+# --- Verification ------------------------------------------------------------
+# After converging, assert the EFFECTIVE configuration (sshd -T, visudo -c),
+# not just the files written. Files can be right while the running config is
+# wrong - see baseline_ssh_dropin above.
+baseline_verify: true

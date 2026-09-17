@@ -1,0 +1,10 @@
+# Pinned collections, installed by setup.sh from requirements.yml
+collections/
+
+# Run output: patch reports, retry files, idempotence logs, drift records
+reports/
+*.retry
+drift.log
+drift-history/
+.drift-run.json
+.drift-run.err

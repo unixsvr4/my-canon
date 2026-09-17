@@ -1,0 +1,40 @@
+---
+# Reboot ONLY if the box actually needs one. Blanket reboots are how a patch
+# window turns into an outage.
+
+- name: Reboot | Does this host need a reboot?
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: patch_reboot_flag
+
+- name: Reboot | Real reboot path
+  when:
+    - patch_reboot_flag.stat.exists
+    - not (patch_simulate | bool)
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+    test_command: uptime
+    # ansible.builtin.reboot waits for the connection to come back; on a slow
+    # physical box with long POST/firmware init, raise reboot_timeout rather
+    # than assuming the host is dead.
+
+- name: Reboot | Simulated reboot
+  when:
+    - patch_reboot_flag.stat.exists
+    - patch_simulate | bool
+  ansible.builtin.shell: |
+    rm -f /var/run/reboot-required
+    echo "$(date -u +%FT%TZ) rebooted (simulated)" >> /var/lib/lab/patch.log
+  changed_when: true
+
+- name: Reboot | Verify the NEW kernel is actually running
+  ansible.builtin.debug:
+    msg: >-
+      [SIMULATED] confirming running kernel == newest installed.
+      Real check: compare `uname -r` to the newest installed kernel package.
+      A host that boots the OLD kernel because grub was not updated looks
+      perfectly healthy and is not patched.
+
+- name: Reboot | Record reboot outcome
+  ansible.builtin.set_fact:
+    patch_rebooted: "{{ patch_reboot_flag.stat.exists }}"

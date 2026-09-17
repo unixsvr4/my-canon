@@ -1,0 +1,6 @@
+{{ ansible_managed | comment }}
+# dictsort: stable key order, so an unchanged set of values renders an
+# identical file and the task stays "ok".
+{% for key, value in (baseline_sysctl | combine(baseline_sysctl_extra)) | dictsort %}
+{{ key }} = {{ value }}
+{% endfor %}

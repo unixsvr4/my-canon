@@ -1,0 +1,11 @@
+---
+# IDEMPOTENCE TECHNIQUE: declarative state in a module.
+# `package` compares what is installed with what is requested and changes
+# nothing when they match - a second run reports "ok", not "changed".
+# Contrast: `command: dnf install -y ...` reports changed on every run, and a
+# playbook that always reports changed hides the one run that really changed.
+
+- name: Packages | Install baseline packages
+  ansible.builtin.package:
+    name: "{{ baseline_packages + baseline_packages_extra }}"
+    state: present

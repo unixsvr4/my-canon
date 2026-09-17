@@ -1,0 +1,13 @@
+---
+# The banner contains NO timestamp, run id, or "last updated" line. Any value
+# that differs per run makes the template differ per run: the task reports
+# changed forever and the drift check can never be clean. (See
+# examples/idempotence/not-idempotent.yml.)
+
+- name: Motd | Write login banner
+  ansible.builtin.template:
+    src: motd.j2
+    dest: /etc/motd
+    owner: root
+    group: root
+    mode: "0644"

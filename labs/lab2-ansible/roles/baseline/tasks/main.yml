@@ -1,0 +1,61 @@
+---
+# =============================================================================
+# baseline - entry point
+#
+# Order matters and is deliberate:
+#   validate  - reject impossible input before touching the host
+#   packages  - everything later depends on these binaries (sshd, visudo, chronyd)
+#   access    - the group must exist before sshd is told to allow it
+#   ssh       - hardening, validated before it is written
+#   time, sysctl, motd
+#   flush     - run pending handlers NOW, so verify sees the reloaded state
+#   verify    - assert the EFFECTIVE configuration, not the files
+#
+# import_tasks (static) rather than include_tasks (dynamic): imported tasks
+# inherit tags, so `--tags baseline_ssh` runs exactly the SSH section.
+# =============================================================================
+
+- name: Validate cross-field inputs
+  ansible.builtin.import_tasks: validate.yml
+  tags: [baseline, baseline_validate]
+
+- name: Install packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [baseline, baseline_packages]
+
+- name: Manage admin access
+  ansible.builtin.import_tasks: access.yml
+  tags: [baseline, baseline_access]
+
+- name: Harden sshd
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [baseline, baseline_ssh]
+
+- name: Configure time sync
+  ansible.builtin.import_tasks: time.yml
+  tags: [baseline, baseline_time]
+
+- name: Configure kernel parameters
+  ansible.builtin.import_tasks: sysctl.yml
+  tags: [baseline, baseline_sysctl]
+
+- name: Write login banner
+  ansible.builtin.import_tasks: motd.yml
+  tags: [baseline, baseline_motd]
+
+# Handlers normally run at the END of the play. Flushing here means the verify
+# step below checks the configuration AFTER any reloads it triggered.
+- name: Flush handlers before verification
+  ansible.builtin.meta: flush_handlers
+  tags: [baseline, baseline_verify]
+
+# Skipped in check mode: nothing was converged, so on a drifted host the
+# effective config is still the drifted one and the assertion would fail. The
+# drift is already reported by the diffs above - failing here as well would
+# turn a DRIFT finding into an "incomplete run" (see drift-check.sh exit codes).
+- name: Verify effective configuration
+  ansible.builtin.import_tasks: verify.yml
+  when:
+    - baseline_verify | bool
+    - not ansible_check_mode
+  tags: [baseline, baseline_verify]

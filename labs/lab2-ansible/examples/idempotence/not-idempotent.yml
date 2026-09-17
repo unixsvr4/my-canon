@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# ANTI-PATTERNS - do not copy. Every task here "works" on the first run.
+# Run it twice and every task reports changed again, or corrupts the host a
+# little more each time. tests/idempotence.sh proves it:
+#
+#   tests/idempotence.sh examples/idempotence/not-idempotent.yml   # exits 1
+#
+# The fixed version of each task, with the same number, is in idempotent.yml.
+# =============================================================================
+- name: Six ways to write a non-idempotent play
+  hosts: app01
+  gather_facts: false
+  tasks:
+
+    # 1. APPENDING with shell. Every run adds another copy of the line; the file
+    #    grows forever and "changed" is reported forever.
+    - name: 1 | Append a kernel parameter with echo
+      ansible.builtin.shell: echo "net.core.somaxconn = 1024" >> /etc/sysctl.d/99-demo.conf
+
+    # 2. IMPERATIVE command for declarative state. useradd exits 9 on the second
+    #    run, so someone adds failed_when to hide it - now it reports changed
+    #    forever and would also hide a real failure.
+    - name: 2 | Create a user with useradd
+      ansible.builtin.command: useradd demo-svc
+      register: demo_useradd
+      failed_when: demo_useradd.rc not in [0, 9]
+
+    # 3. A VALUE THAT CHANGES EVERY RUN inside managed content. The file is
+    #    rewritten each time, so drift detection can never come back clean.
+    - name: 3 | Write a config file stamped with the deploy time
+      ansible.builtin.copy:
+        dest: /etc/demo-app.conf
+        content: |
+          listen_port = 8080
+          deployed_at = {{ now(utc=true).isoformat() }}
+        mode: "0644"
+
+    # 4. EDITING with sed via shell. The command module can't know whether sed
+    #    changed anything, so it always reports changed - and a pattern that
+    #    stops matching fails silently.
+    - name: 4 | Set the log level with sed
+      ansible.builtin.shell: sed -i 's/^log_level.*/log_level = info/' /etc/demo-app.conf || echo 'log_level = info' >> /etc/demo-app.conf
+
+    # 5. UNCONDITIONAL RESTART. The service bounces on every run, including the
+    #    runs where nothing changed - a self-inflicted outage on a schedule.
+    - name: 5 | Restart the app every run
+      ansible.builtin.command: touch /var/run/demo-app.restarted
+
+    # 6. A COMMAND WITH NO GUARD. Rebuilds the virtualenv from scratch every run.
+    - name: 6 | Create a virtualenv
+      ansible.builtin.command: python3 -m venv --clear --without-pip /opt/demo-app/venv

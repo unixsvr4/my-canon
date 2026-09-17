@@ -1,0 +1,161 @@
+---
+# =============================================================================
+# patch.yml - a safe rolling patch run across the fleet.
+#
+#   ansible-playbook patch.yml                                   # run; stops itself at web03
+#   ansible-playbook patch.yml --limit @reports/patch.retry \
+#                               -e simulate_health_failure=false  # re-run only the failures
+#
+# Read it top to bottom: the structure is the safety design.
+#   serial              canary first, then a small batch, then the rest
+#   max_fail_percentage abort the run instead of marching through the fleet
+#   pre_tasks           announce the batch, drain it from the load balancer
+#   role: patch         pre-flight assertions -> patch -> reboot only if needed
+#   post_tasks          health gate; on failure capture diagnostics and
+#                       quarantine; ALWAYS return to pool or explicitly leave out
+#   final fail          make the batch gate count rescued failures (see below)
+#   second play         build the report from per-host records
+# =============================================================================
+
+- name: Patch the Linux fleet
+  hosts: linux
+  gather_facts: true
+  become: false                 # containers run as root; on real hosts: become with a scoped sudoers entry
+
+  # Canary first, then a small batch, then the rest. On a real fleet:
+  # serial: [1, 5, "25%"]
+  serial: [1, 2, "100%"]
+
+  # Abort the whole run rather than marching through the fleet breaking things.
+  max_fail_percentage: 0
+
+  vars:
+    quarantine_dir: "{{ playbook_dir }}/reports"
+
+  pre_tasks:
+    # reports/ is gitignored, so on a fresh clone it does not exist. Without this
+    # task the first per-host record write fails - on the canary, before anything
+    # else has happened.
+    - name: Report | Ensure the per-host record directory exists
+      ansible.builtin.file:
+        path: "{{ quarantine_dir }}/run"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Gate | Announce the batch
+      ansible.builtin.debug:
+        msg: "batch: {{ ansible_play_batch | join(', ') }}"
+      run_once: true
+
+    - name: Drain | Pull the member out of the load balancer
+      # delegate_to the LB (F5 / haproxy / cloud target group) - the action happens
+      # THERE, not on the host being patched.
+      ansible.builtin.debug:
+        msg: "[SIMULATED] delegate_to lb01 -> disable pool member {{ inventory_hostname }}, wait for connections to finish"
+      when: drain_required | default(true) | bool
+
+  roles:
+    - role: patch
+
+  post_tasks:
+    - name: Health | Post-patch health gate
+      block:
+        - name: Health | Mark the app healthy (stand-in for the service starting)
+          ansible.builtin.shell: |
+            if [ "{{ simulate_health_failure | default(false) }}" = "True" ]; then
+              rm -f /var/run/lab-app.healthy
+            else
+              touch /var/run/lab-app.healthy
+            fi
+          changed_when: false
+
+        - name: Health | Service up, port listening, app answering
+          # Not "is SSH up". A real gate is: service active + port listening +
+          # app health endpoint 200 + cluster reports the member healthy.
+          # shell, not command: real health checks are pipelines
+          # (curl -fsS localhost/health | grep -q ok), set per group in group_vars.
+          ansible.builtin.shell: "{{ health_check_cmd }}"  # noqa: command-instead-of-shell
+          register: health
+          retries: "{{ patch_health_retries }}"
+          delay: "{{ patch_health_delay }}"
+          until: health.rc == 0
+          changed_when: false
+
+        - name: Health | Passed
+          ansible.builtin.set_fact:
+            patch_status: "SUCCESS"
+
+      rescue:
+        - name: Rescue | Capture diagnostics before doing anything else
+          ansible.builtin.shell: |
+            echo "=== {{ inventory_hostname }} failed health gate at $(date -u +%FT%TZ) ==="
+            tail -20 /var/lib/lab/patch.log 2>/dev/null || true
+          register: diag
+          changed_when: false
+
+        - name: Rescue | Quarantine the host
+          ansible.builtin.set_fact:
+            patch_status: "FAILED_HEALTH_GATE"
+
+        - name: Rescue | Write the diagnostic to the report dir
+          ansible.builtin.copy:
+            content: "{{ diag.stdout }}\n"
+            dest: "{{ quarantine_dir }}/quarantine-{{ inventory_hostname }}.log"
+            mode: "0644"
+          delegate_to: localhost
+
+      always:
+        - name: Always | Return to pool, or explicitly leave it out
+          # This is the task that stops you ending a run with a server silently
+          # missing from the load balancer.
+          ansible.builtin.debug:
+            msg: >-
+              [SIMULATED]
+              {{ 'ENABLE pool member' if (patch_status | default('FAILED')) == 'SUCCESS'
+                 else 'LEAVING OUT of pool, quarantined for a human:' }}
+              {{ inventory_hostname }}
+
+        - name: Always | Record this host's result the moment it finishes
+          # Written per host, not at the end of the run. A run that aborts is
+          # exactly when you most need to know what it already did.
+          ansible.builtin.copy:
+            dest: "{{ quarantine_dir }}/run/{{ inventory_hostname }}.csv"
+            mode: "0644"
+            content: "{{ patch_record | join(',') }}\n"
+          vars:
+            patch_record:
+              - "{{ inventory_hostname }}"
+              - "{{ group_names | join('|') }}"
+              - "{{ patch_status | default('FAILED') }}"
+              - "{{ patch_kernel_before | default('-') }}"
+              - "{{ patch_rebooted | default('-') }}"
+              - '"{{ patch_packages | default("-") }}"'
+              - "{{ patch_started_at | default('-') }}"
+          delegate_to: localhost
+
+    # SUBTLE, AND WORTH KNOWING: a host whose failure was caught by a `rescue`
+    # is NOT counted as failed for max_fail_percentage, so the run would happily
+    # continue into the next batch. To make the batch gate see it, fail the host
+    # OUTSIDE the block. (Verified on ansible-core 2.21 - see README.)
+    - name: Gate | Fail the host so the batch logic counts it
+      ansible.builtin.fail:
+        msg: "{{ inventory_hostname }} did not pass the post-patch health gate - quarantined, left OUT of the pool."
+      when: (patch_status | default('FAILED')) != 'SUCCESS'
+
+# ---------------------------------------------------------------------------
+# The report IS the deliverable: this is what replaced the spreadsheet. The run
+# produces the record; nobody maintains one by hand.
+- name: Summarise the patch run
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Report | Build the CSV from the per-host records
+      ansible.builtin.command: ./summarize.sh
+      changed_when: false
+      register: summary
+
+    - name: Report | Summary
+      ansible.builtin.debug:
+        msg: "{{ summary.stdout_lines }}"

@@ -1,0 +1,3 @@
+{{ ansible_managed | comment }}
+# Written with `visudo -cf` validation: an invalid rule is never installed.
+%{{ baseline_admin_group }} ALL=(ALL) {{ 'NOPASSWD: ' if baseline_admin_sudo_nopasswd else '' }}ALL

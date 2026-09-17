@@ -1,0 +1,43 @@
+---
+# IDEMPOTENCE TECHNIQUES: purpose-built modules (group, user, authorized_key)
+# instead of `useradd`, which fails the second time; and a sudoers file written
+# with `validate`, so a syntax error can never lock everyone out of sudo.
+
+- name: Access | Ensure the admin group exists
+  ansible.builtin.group:
+    name: "{{ baseline_admin_group }}"
+    state: present
+
+- name: Access | Manage admin accounts
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: ["{{ baseline_admin_group }}"]
+    append: true               # add to the group without stripping other memberships
+    shell: /bin/bash
+    state: "{{ item.state | default('present') }}"
+    remove: "{{ (item.state | default('present')) == 'absent' }}"
+  loop: "{{ baseline_admin_users }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.state | default('present') }})"
+
+- name: Access | Authorise admin SSH keys
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.key }}"
+    state: present
+  loop: "{{ baseline_admin_users | selectattr('key', 'defined') | list }}"
+  when: (item.state | default('present')) == 'present'
+  loop_control:
+    label: "{{ item.name }}"
+
+# validate: the new content is written to a temp file, `visudo -cf` checks it,
+# and only a valid file replaces the real one. A broken sudoers rule is how
+# automation locks out the humans who would fix it.
+- name: Access | Grant the admin group sudo
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "/etc/sudoers.d/10-baseline-{{ baseline_admin_group }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s

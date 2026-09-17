@@ -1,0 +1,41 @@
+---
+# Hard assertions BEFORE touching anything. Every one of these is a real
+# outage someone has already had.
+
+- name: Preflight | Record the before-state
+  ansible.builtin.set_fact:
+    patch_kernel_before: "{{ ansible_facts['kernel'] | default('unknown') }}"
+    patch_started_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Preflight | Measure free space on /var
+  ansible.builtin.command: df -Pm /var
+  register: patch_df_var
+  changed_when: false
+
+- name: preflight | /var has room for the transaction
+  ansible.builtin.assert:
+    that:
+      - (patch_df_var.stdout_lines[-1].split()[3] | int) > (patch_min_free_var_mb | int)
+    fail_msg: >-
+      Only {{ patch_df_var.stdout_lines[-1].split()[3] }}MB free on /var - a full /var
+      mid-transaction is how you brick a box.
+    success_msg: "disk ok: {{ patch_df_var.stdout_lines[-1].split()[3] }}MB free"
+
+- name: Preflight | No other package transaction in flight
+  ansible.builtin.stat:
+    path: /var/run/dnf.pid
+  register: patch_dnf_lock
+  failed_when: patch_dnf_lock.stat.exists
+
+- name: Preflight | This is the host we think it is
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['hostname'] == inventory_hostname
+    fail_msg: "Hostname mismatch - inventory says {{ inventory_hostname }}, box says {{ ansible_facts['hostname'] }}."
+
+- name: Preflight | Backup/snapshot confirmed for this tier
+  ansible.builtin.debug:
+    msg: >-
+      [SIMULATED] verified pre-patch VMware snapshot / backup for {{ inventory_hostname }}.
+      In production this queries the backup system or community.vmware and FAILS if there is no
+      recent restore point - the snapshot is the rollback path, so no snapshot means no patch.

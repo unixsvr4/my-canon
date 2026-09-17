@@ -1,0 +1,28 @@
+---
+# The patch role's input contract, enforced before any task runs.
+argument_specs:
+  main:
+    short_description: Patch one host safely - pre-flight, update, conditional reboot.
+    author:
+      - Abdoul Aw
+    options:
+      patch_simulate:
+        type: bool
+        default: true
+        description: Simulate the package transaction (lab mode). false runs dnf for real.
+      patch_security_only:
+        type: bool
+        default: true
+        description: Apply security errata only (dnf --security).
+      patch_min_free_var_mb:
+        type: int
+        default: 512
+        description: Minimum free MB on /var before a transaction is allowed to start.
+      patch_health_retries:
+        type: int
+        default: 3
+        description: Health-gate attempts, used by the calling play.
+      patch_health_delay:
+        type: int
+        default: 2
+        description: Seconds between health-gate attempts.

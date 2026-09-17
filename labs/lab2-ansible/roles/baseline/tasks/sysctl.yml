@@ -1,0 +1,31 @@
+---
+# IDEMPOTENCE TECHNIQUE: one file owns ALL the role's kernel parameters.
+#
+# Why a template and not ansible.posix.sysctl (one task per key)?
+# The sysctl module is idempotent per key, but REMOVING a key from the variables
+# leaves the old line behind on every host forever - invisible drift. A single
+# templated file is declarative as a whole: remove a key, and the next run
+# removes the line.
+#
+# The template iterates with dictsort, so key ORDER in the file is stable.
+# Iterating a dict whose order can vary would rewrite an identical file in a
+# different order and report "changed" - a classic false positive.
+
+# Minimal images (and some container bases) have no /etc/sysctl.d. Creating
+# it explicitly is idempotent and removes an assumption about the base image.
+- name: Sysctl | Ensure the drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/sysctl.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Sysctl | Write baseline parameters
+  ansible.builtin.template:
+    src: sysctl-baseline.conf.j2
+    dest: /etc/sysctl.d/90-baseline.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Baseline | apply sysctl

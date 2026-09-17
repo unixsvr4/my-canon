@@ -1,0 +1,33 @@
+---
+# =============================================================================
+# group_vars/all.yml - applies to every host; the LOWEST inventory precedence.
+# Group files (web.yml, db.yml) override it, host_vars override those.
+# =============================================================================
+
+# --- Connection (lab) ----------------------------------------------------------
+# Containers stand in for servers. On real hosts this block is ssh with an
+# automation account, a key from a vault, and become: true.
+ansible_connection: community.docker.docker
+ansible_user: root
+
+# --- baseline role: fleet-wide inputs ------------------------------------------
+baseline_admin_group: ops
+
+# Public keys only - never private material in inventory. Removing a person is
+# state: absent (carol), not deleting the entry: Ansible manages only what it is
+# told about, so a deleted entry would leave the account on every host.
+baseline_admin_users:
+  - name: alice
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPqG8uViwYB3JOUSuM9fZZg7tNYo/HM1GAXyv3755VuL alice@canon.example"
+  - name: bob
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPMTebC3mc8eA6FcgCe75Hej1ZoKVRH17RmX8x09Gz4C bob@canon.example"
+  - name: carol
+    state: absent
+
+# Containers share the host's kernel; writing /proc/sys from inside one is
+# refused. The file is still managed (so drift is still detected); only the
+# "load it now" handler is skipped. On VMs and bare metal, leave the default.
+baseline_sysctl_apply: false
+
+# --- patch role: fleet-wide defaults -------------------------------------------
+drain_required: true

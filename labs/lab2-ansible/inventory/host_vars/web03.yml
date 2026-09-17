@@ -1,0 +1,7 @@
+---
+# host_vars are for genuine one-offs only. Every host_var is a small, permanent
+# difference between "identical" servers, so keep the count near zero.
+#
+# This one is deliberate: web03 will fail its post-patch health gate, so
+# patch.yml has a real failure to stop on.
+simulate_health_failure: true

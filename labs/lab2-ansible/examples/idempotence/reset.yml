@@ -1,0 +1,21 @@
+---
+# Remove everything the two demo playbooks create, so they can be compared from
+# a clean starting point. Used by `make lab2-idempotence-demo`.
+- name: Reset the idempotence demo host
+  hosts: app01
+  gather_facts: false
+  tasks:
+    - name: Remove demo files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/sysctl.d/99-demo.conf
+        - /etc/demo-app.conf
+        - /var/run/demo-app.restarted
+        - /opt/demo-app
+
+    - name: Remove demo user
+      ansible.builtin.user:
+        name: demo-svc
+        state: absent

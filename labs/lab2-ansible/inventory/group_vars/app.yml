@@ -1,0 +1,5 @@
+---
+# Application tier - uses the baseline role's defaults unchanged. A short group
+# file is still worth having: it records that "no overrides" was a decision.
+service_name: appd
+health_check_cmd: "test -f /var/run/lab-app.healthy"

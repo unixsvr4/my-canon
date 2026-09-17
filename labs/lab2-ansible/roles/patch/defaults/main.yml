@@ -1,0 +1,10 @@
+---
+# =============================================================================
+# patch role - defaults. Safe values; overridden per environment from
+# group_vars, never edited per host. Contract: meta/argument_specs.yml.
+# =============================================================================
+patch_simulate: true           # true = no real package downloads (lab mode)
+patch_security_only: true      # dnf --security in the real thing
+patch_min_free_var_mb: 512     # /var must have room or a transaction can wedge the box
+patch_health_retries: 3
+patch_health_delay: 2

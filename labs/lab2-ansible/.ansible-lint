@@ -1,0 +1,14 @@
+---
+# ansible-lint configuration. Run from this directory:  ansible-lint
+#
+# `production` is the strictest built-in profile (FQCNs, naming, no-changed-when,
+# risky-shell-pipe, argument_specs-friendly role layout, ...).
+profile: production
+
+exclude_paths:
+  - collections/          # third-party collections installed by setup.sh
+  - reports/
+  - drift-history/
+  # Deliberately broken: it exists to demonstrate what the linter and the
+  # idempotence test catch. See examples/idempotence/README.md.
+  - examples/idempotence/not-idempotent.yml

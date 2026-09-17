@@ -1,0 +1,43 @@
+---
+# argument_specs (meta/argument_specs.yml) already checked types and choices.
+# These assertions cover rules that span SEVERAL variables, which a per-variable
+# spec cannot express. They change nothing, so they are safe in check mode.
+
+# argument_specs does NOT catch this one. For a `str` option whose choices
+# include "yes"/"no", ansible-core's choice check treats a YAML boolean as
+# matching - so an unquoted `no` (boolean false) passes validation and reaches
+# the template as False, rendering `PermitRootLogin False`. Verified on
+# ansible-core 2.21.4; see tests/input-validation.sh.
+- name: Validate | PermitRootLogin is a quoted string, not a YAML boolean
+  ansible.builtin.assert:
+    that:
+      - baseline_ssh_permit_root_login is string
+    fail_msg: >-
+      baseline_ssh_permit_root_login must be a quoted string ("no", "prohibit-password" or "yes").
+      Unquoted no/yes in YAML is a boolean and would render as PermitRootLogin False/True.
+    quiet: true
+
+- name: Validate | Admin user names are unique
+  ansible.builtin.assert:
+    that:
+      - (baseline_admin_users | map(attribute='name') | list | unique | length)
+        == (baseline_admin_users | length)
+    fail_msg: "baseline_admin_users lists the same name twice - which entry wins would be ambiguous."
+    quiet: true
+
+- name: Validate | Extra sysctl keys do not silently override role-owned keys
+  ansible.builtin.assert:
+    that:
+      - (baseline_sysctl_extra.keys() | intersect(baseline_sysctl.keys()) | length) == 0
+    fail_msg: >-
+      baseline_sysctl_extra redefines role-owned keys
+      {{ baseline_sysctl_extra.keys() | intersect(baseline_sysctl.keys()) | list }}.
+      Override baseline_sysctl itself if replacing a default is really intended.
+    quiet: true
+
+- name: Validate | Root login is never fully open while passwords are allowed
+  ansible.builtin.assert:
+    that:
+      - not (baseline_ssh_permit_root_login == 'yes' and baseline_ssh_password_authentication | bool)
+    fail_msg: "PermitRootLogin yes together with PasswordAuthentication yes is refused by this role."
+    quiet: true

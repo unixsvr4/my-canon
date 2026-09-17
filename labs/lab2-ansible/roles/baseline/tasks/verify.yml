@@ -1,0 +1,30 @@
+---
+# Verify the EFFECTIVE configuration.
+#
+# A file with the right content proves little: sshd reads drop-ins in lexical
+# order and the FIRST value wins, so a vendor file can override ours without
+# any task failing. `sshd -T` prints the configuration sshd would actually run
+# with. These tasks change nothing (changed_when: false). They are skipped in
+# check mode (see main.yml), because verification describes the state AFTER a
+# converge, and check mode converges nothing.
+
+- name: Verify | Read effective sshd configuration
+  ansible.builtin.command: /usr/sbin/sshd -T
+  register: baseline_sshd_effective
+  changed_when: false
+
+- name: Verify | Effective sshd settings match the baseline
+  ansible.builtin.assert:
+    that:
+      - ("permitrootlogin %s" | format(baseline_ssh_permit_root_login)) in baseline_sshd_effective.stdout_lines
+      - ("passwordauthentication %s" | format('yes' if baseline_ssh_password_authentication else 'no')) in baseline_sshd_effective.stdout_lines
+      - ("maxauthtries %s" | format(baseline_ssh_max_auth_tries)) in baseline_sshd_effective.stdout_lines
+    fail_msg: >-
+      sshd's EFFECTIVE configuration does not match the baseline, although the drop-in was written.
+      Another file in /etc/ssh/sshd_config.d probably sorts earlier and wins. Effective values:
+      {{ baseline_sshd_effective.stdout_lines | select('match', '^(permitrootlogin|passwordauthentication|maxauthtries) ') | list }}
+    success_msg: "sshd effective config matches baseline"
+
+- name: Verify | Whole sudoers configuration parses
+  ansible.builtin.command: /usr/sbin/visudo -c
+  changed_when: false

@@ -1,0 +1,10 @@
+---
+# Web tier. Shows the _extra merge pattern: these keys are ADDED to the role's
+# baseline_sysctl, not substituted for it.
+baseline_sysctl_extra:
+  net.core.somaxconn: 4096
+  net.ipv4.tcp_max_syn_backlog: 4096
+
+# Used by patch.yml's health gate and drain logic.
+service_name: nginx
+health_check_cmd: "test -f /var/run/lab-app.healthy"

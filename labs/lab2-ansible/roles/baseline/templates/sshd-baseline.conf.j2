@@ -1,0 +1,15 @@
+{{ ansible_managed | comment }}
+# Rendered by the baseline role. Local edits are reverted on the next run and
+# reported by the drift check first.
+#
+# This file is named to sort BEFORE vendor drop-ins: sshd uses the first value
+# it reads for most keywords.
+
+PermitRootLogin {{ baseline_ssh_permit_root_login }}
+PasswordAuthentication {{ 'yes' if baseline_ssh_password_authentication else 'no' }}
+KbdInteractiveAuthentication no
+MaxAuthTries {{ baseline_ssh_max_auth_tries }}
+ClientAliveInterval {{ baseline_ssh_client_alive_interval }}
+ClientAliveCountMax 2
+AllowGroups {{ baseline_admin_group }} root
+X11Forwarding no

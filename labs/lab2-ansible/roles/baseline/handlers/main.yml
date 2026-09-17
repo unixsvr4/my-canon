@@ -1,0 +1,32 @@
+---
+# =============================================================================
+# Handlers run only when NOTIFIED, and only once per play no matter how many
+# tasks notified them. That is what makes restarts idempotent: an unchanged
+# config never bounces a service.
+#
+# Handler names are prefixed with the role name so a playbook combining several
+# roles can't accidentally trigger another role's "restart sshd".
+#
+# Service managers: these lab hosts are containers without systemd (PID 1 is
+# `sleep`). The handlers skip the reload there instead of failing, so the same
+# role runs unchanged on containers, VMs and physical servers.
+# =============================================================================
+
+- name: Baseline | reload sshd
+  ansible.builtin.service:
+    name: sshd
+    state: reloaded
+  when: ansible_facts['service_mgr'] | default('') == 'systemd'
+
+- name: Baseline | restart chronyd
+  ansible.builtin.service:
+    name: chronyd
+    state: restarted
+  when: ansible_facts['service_mgr'] | default('') == 'systemd'
+
+# Handlers that run commands report changed: they only run when something
+# changed, so "changed" is the truth.
+- name: Baseline | apply sysctl
+  ansible.builtin.command: sysctl -p /etc/sysctl.d/90-baseline.conf
+  changed_when: true
+  when: baseline_sysctl_apply | bool

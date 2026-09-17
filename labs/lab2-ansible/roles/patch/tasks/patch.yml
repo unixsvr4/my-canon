@@ -1,0 +1,41 @@
+---
+- name: Patch | Apply updates (simulated)
+  when: patch_simulate | bool
+  block:
+    - name: Patch | Simulated dnf transaction
+      ansible.builtin.shell: |
+        set -e
+        mkdir -p /var/lib/lab
+        echo "$(date -u +%FT%TZ) patched (simulated, security_only={{ patch_security_only }})" >> /var/lib/lab/patch.log
+        # pretend two packages moved, one of which wants a reboot
+        echo "kernel-5.14.0-427.el9 openssl-3.0.7-27.el9" > /var/lib/lab/patched_packages
+        touch /var/run/reboot-required
+      args:
+        creates: /var/lib/lab/patched_packages     # idempotent: a second run is a no-op
+      register: patch_result
+
+- name: Patch | Apply updates (real)
+  when: not (patch_simulate | bool)
+  ansible.builtin.dnf:
+    name: "*"
+    # `latest` is the POINT of a patch run, so the linter's package-latest rule
+    # (right for baselines - see the baseline role) is waived here on purpose.
+    state: latest  # noqa: package-latest
+    security: "{{ patch_security_only | bool }}"
+    # In production the repo is PINNED to a mirror snapshot for the whole cycle,
+    # so host #1 and host #200 land on an identical package set. Patching against
+    # a live upstream is drift you created yourself.
+  register: patch_result
+
+# NOTE: read it ON THE TARGET. lookup() runs on the CONTROLLER - a classic
+# Ansible mistake that silently reads the wrong machine's file.
+- name: Patch | Read back what moved
+  ansible.builtin.command: cat /var/lib/lab/patched_packages
+  register: patch_pkgs_readback
+  changed_when: false
+  failed_when: false
+
+- name: Patch | Record what changed
+  ansible.builtin.set_fact:
+    patch_changed: "{{ patch_result.changed | default(false) }}"
+    patch_packages: "{{ patch_pkgs_readback.stdout | default('n/a', true) | trim }}"

@@ -1,0 +1,26 @@
+---
+# IDEMPOTENCE TECHNIQUES:
+#   - `creates:` makes a command idempotent: skip it when its output exists.
+#   - a TEMPLATED drop-in owns the whole file, so the result is identical no
+#     matter what the file held before (unlike sed/lineinfile edits of a file
+#     that other people and packages also edit).
+#   - `validate:` checks the candidate file BEFORE it replaces the real one.
+#   - `notify:` reloads sshd only when the file actually changed.
+
+# sshd -t (used by validate below) needs host keys. On a fresh image there are
+# none until the service first starts. `ssh-keygen -A` only creates missing
+# keys; `creates:` skips the task entirely once they exist.
+- name: SSH | Generate host keys if missing
+  ansible.builtin.command: ssh-keygen -A
+  args:
+    creates: /etc/ssh/ssh_host_ed25519_key
+
+- name: SSH | Write hardening drop-in
+  ansible.builtin.template:
+    src: sshd-baseline.conf.j2
+    dest: "{{ baseline_ssh_dropin }}"
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Baseline | reload sshd

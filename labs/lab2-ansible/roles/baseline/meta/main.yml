@@ -1,0 +1,22 @@
+---
+# Galaxy metadata: what a consumer needs to know before depending on this role.
+galaxy_info:
+  role_name: baseline
+  namespace: canon
+  author: Abdoul Aw
+  description: Idempotent, validated OS baseline for RHEL-family hosts (packages, access, sshd, chrony, sysctl, banner).
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - baseline
+    - hardening
+    - ssh
+    - sysctl
+
+# No role dependencies. A baseline that silently pulls in other roles is a
+# baseline nobody can reason about; compose roles in the playbook instead.
+dependencies: []

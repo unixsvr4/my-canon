@@ -1,0 +1,20 @@
+---
+# =============================================================================
+# patch role - one host's patch cycle, in a strict order.
+#
+# The intelligence about the FLEET (batch sizes, health gates, when to abort)
+# lives in the calling play, patch.yml. The role only knows how to patch one
+# host safely, which is what makes it reusable from a scheduled patch run, an
+# emergency CVE run, or a rebuild pipeline alike.
+# =============================================================================
+- name: Pre-flight assertions
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [patch_preflight]
+
+- name: Apply updates
+  ansible.builtin.import_tasks: patch.yml
+  tags: [patch_apply]
+
+- name: Reboot only if required
+  ansible.builtin.import_tasks: reboot.yml
+  tags: [patch_reboot]

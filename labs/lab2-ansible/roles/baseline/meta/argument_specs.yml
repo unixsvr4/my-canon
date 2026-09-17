@@ -1,0 +1,95 @@
+---
+# =============================================================================
+# The role's input contract, enforced by ansible-core BEFORE any task runs.
+#
+# Pass an unknown choice or the wrong type and the play fails immediately:
+#   "value of baseline_ssh_permit_root_login must be one of: no,
+#    prohibit-password, yes, got: maybe"
+# instead of rendering a broken sshd config on 200 hosts.
+#
+# This file is also the role's documentation: `ansible-doc` can read it, and the
+# README's variable table is generated from the same facts.
+# =============================================================================
+argument_specs:
+  main:
+    short_description: Converge a RHEL-family host to the platform baseline.
+    description:
+      - Installs baseline packages, manages the admin group, users and sudo rule,
+        hardens sshd via a validated drop-in, configures chrony and sysctl, and
+        writes the login banner.
+      - Idempotent - a second run reports zero changes. Services are reloaded only
+        via handlers, only when their configuration actually changed.
+    author:
+      - Abdoul Aw
+    options:
+      baseline_packages:
+        type: list
+        elements: str
+        description: Packages every host must have. Role-owned; extend with baseline_packages_extra.
+      baseline_packages_extra:
+        type: list
+        elements: str
+        description: Caller-owned additional packages, appended to baseline_packages.
+      baseline_admin_group:
+        type: str
+        description: Group granted SSH access and the sudo rule.
+      baseline_admin_users:
+        type: list
+        elements: dict
+        description: Admin accounts to manage.
+        options:
+          name:
+            type: str
+            required: true
+            description: Login name.
+          key:
+            type: str
+            description: SSH public key to authorise. Omit to manage the account only.
+          state:
+            type: str
+            choices: [present, absent]
+            default: present
+            description: absent removes the account and its home directory.
+      baseline_admin_sudo_nopasswd:
+        type: bool
+        description: Whether the admin group may sudo without a password.
+      baseline_ssh_permit_root_login:
+        type: str
+        choices: ["no", "prohibit-password", "yes"]
+        description:
+          - sshd PermitRootLogin. Quote it in YAML - bare no is a boolean.
+          - This spec's choice check lets a YAML boolean through; tasks/validate.yml rejects it.
+      baseline_ssh_password_authentication:
+        type: bool
+        description: sshd PasswordAuthentication.
+      baseline_ssh_max_auth_tries:
+        type: int
+        description: sshd MaxAuthTries.
+      baseline_ssh_client_alive_interval:
+        type: int
+        description: sshd ClientAliveInterval, in seconds.
+      baseline_ssh_dropin:
+        type: path
+        description: sshd drop-in path. Must sort before vendor drop-ins (first value wins in sshd).
+      baseline_ntp_servers:
+        type: list
+        elements: str
+        description: NTP servers for chrony.
+      baseline_sysctl:
+        type: dict
+        description: Role-owned kernel parameters.
+      baseline_sysctl_extra:
+        type: dict
+        description: Caller-owned kernel parameters, merged over baseline_sysctl.
+      baseline_sysctl_apply:
+        type: bool
+        description: Load parameters into the running kernel (false in containers).
+      baseline_motd_owner:
+        type: str
+        description: Team named in the login banner.
+      baseline_motd_contact:
+        type: str
+        description: Contact address in the login banner.
+      baseline_verify:
+        type: bool
+        description: Assert the effective sshd and sudo configuration after converging.
