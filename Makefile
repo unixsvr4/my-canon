@@ -1,0 +1,120 @@
+# =============================================================================
+# One entry point for every check and demo in the repository.
+#
+#   make help          list targets
+#   make ci            everything that needs no Docker (what CI runs)
+#   make all           ci + the Docker-backed Ansible and bare-metal checks
+#
+# Each target is the exact command documented in the lab READMEs, so a green
+# `make all` means the READMEs are true.
+# =============================================================================
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+LAB1 := labs/lab1-terraform
+LAB2 := labs/lab2-ansible
+LAB3 := labs/lab3-baremetal
+
+TF_ROOTS    := $(LAB1)/modules/app_stack $(LAB1)/envs/dev $(LAB1)/envs/prod \
+               $(LAB1)/examples/01-count-vs-for-each $(LAB1)/examples/02-for-each-shapes \
+               $(LAB1)/examples/03-nested-for-each \
+               $(LAB1)/examples/04-count-to-for-each-moved/v1 $(LAB1)/examples/04-count-to-for-each-moved/v2
+TF_EXAMPLES := 01-count-vs-for-each 02-for-each-shapes 03-nested-for-each 04-count-to-for-each-moved
+
+# Trace logging (if set in a shell profile) makes every Terraform call slow.
+unexport TF_LOG TF_LOG_PATH
+
+.PHONY: help ci all check test \
+        lab1-static lab1-test tf-examples lab1-scan \
+        lab2-static lab2-up lab2-test lab2-idempotence-demo lab2-patch-demo lab2-drift-demo lab2-down \
+        lab3-static lab3-test lab3-artifacts clean
+
+help: ## List targets
+	@grep -hE '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  \033[1m%-24s\033[0m %s\n", $$1, $$2}'
+
+ci: check test ## Static checks + tests that need no Docker (what CI runs)
+
+all: ci lab2-up lab2-test lab2-patch-demo lab3-artifacts ## Everything, including Docker-backed checks
+
+check: lab1-static lab1-scan lab2-static lab3-static ## All static checks
+
+test: lab1-test tf-examples lab3-test ## All tests that need no Docker
+
+# --- Lab 1: Terraform ----------------------------------------------------------
+lab1-static: ## terraform fmt -check, init -backend=false, validate, tflint on every root
+	terraform fmt -check -recursive $(LAB1)
+	@for d in $(TF_ROOTS); do \
+	  echo "== $$d"; \
+	  (cd $$d && terraform init -backend=false -input=false >/dev/null && terraform validate -no-color && tflint --no-color) || exit 1; \
+	done
+
+lab1-scan: ## trivy config scan of the Terraform code (misconfiguration gate)
+	trivy config --quiet --exit-code 1 $(LAB1)
+
+lab1-test: ## terraform test on the app_stack module (12 plan-only runs)
+	cd $(LAB1)/modules/app_stack && terraform init -backend=false -input=false >/dev/null && terraform test -no-color
+
+tf-examples: ## Run the four for_each demos (self-cleaning)
+	@for e in $(TF_EXAMPLES); do ./$(LAB1)/examples/$$e/demo.sh || exit 1; done
+
+# --- Lab 2: Ansible ------------------------------------------------------------
+lab2-static: ## ansible-lint (production profile) + syntax checks
+	cd $(LAB2) && { [ -d collections/ansible_collections/community/docker ] || \
+	  ansible-galaxy collection install -r requirements.yml -p ./collections >/dev/null; }
+	cd $(LAB2) && ansible-lint
+	cd $(LAB2) && for p in site.yml patch.yml examples/idempotence/idempotent.yml examples/idempotence/not-idempotent.yml; do \
+	  ansible-playbook --syntax-check $$p >/dev/null || exit 1; echo "syntax ok: $$p"; done
+
+lab2-up: ## Create the six lab containers and install pinned collections
+	cd $(LAB2) && ./setup.sh
+
+lab2-test: ## Converge, prove idempotence, prove the input contract, run the drift cycle
+	cd $(LAB2) && tests/idempotence.sh
+	cd $(LAB2) && tests/input-validation.sh
+	$(MAKE) lab2-idempotence-demo lab2-drift-demo
+
+lab2-idempotence-demo: ## Anti-patterns fail the idempotence test; fixes pass
+	cd $(LAB2) && ansible-playbook examples/idempotence/reset.yml >/dev/null
+	cd $(LAB2) && if tests/idempotence.sh examples/idempotence/not-idempotent.yml; then \
+	  echo "ERROR: the anti-pattern playbook unexpectedly passed"; exit 1; fi
+	cd $(LAB2) && ansible-playbook examples/idempotence/reset.yml >/dev/null
+	cd $(LAB2) && tests/idempotence.sh examples/idempotence/idempotent.yml
+	cd $(LAB2) && ansible-playbook examples/idempotence/reset.yml >/dev/null
+
+lab2-drift-demo: ## Tamper -> drift (exit 2) -> remediate -> clean (exit 0), record kept
+	cd $(LAB2) && ./tamper.sh db01
+	cd $(LAB2) && ./drift-check.sh; rc=$$?; [ $$rc -eq 2 ] || { echo "expected exit 2, got $$rc"; exit 1; }
+	cd $(LAB2) && ansible-playbook site.yml --limit db01 >/dev/null
+	cd $(LAB2) && ./drift-check.sh
+	cd $(LAB2) && ./drift-show.py
+
+lab2-patch-demo: ## Rolling patch: stops at web03; retry only the failures
+	cd $(LAB2) && rm -rf reports/run reports/patch.retry
+	cd $(LAB2) && if ansible-playbook patch.yml; then echo "ERROR: expected the run to abort at web03"; exit 1; fi
+	cd $(LAB2) && ansible-playbook patch.yml --limit @reports/patch.retry -e simulate_health_failure=false
+	cd $(LAB2) && ./summarize.sh
+
+lab2-down: ## Remove the lab containers
+	cd $(LAB2) && ./teardown.sh
+
+# --- Lab 3: bare metal -----------------------------------------------------------
+lab3-static: ## Compile Python, bash -n shell scripts, lint + syntax-check acceptance.yml
+	python3 -m py_compile $(LAB3)/scripts/*.py $(LAB3)/tests/*.py
+	@for s in $(LAB3)/scripts/*.sh; do bash -n $$s && echo "bash -n ok: $$s"; done
+	cd $(LAB3) && ./scripts/render.py >/dev/null && ansible-lint acceptance.yml
+	cd $(LAB3) && ansible-playbook --syntax-check -i out/inventory.yml acceptance.yml >/dev/null && echo "syntax ok: acceptance.yml"
+
+lab3-test: ## Validate hosts.yml, render artifacts, run 20 unit tests
+	cd $(LAB3) && ./scripts/validate_hosts.py && ./scripts/render.py
+	cd $(LAB3) && python3 -m unittest discover -s tests
+
+lab3-artifacts: ## dhcpd -t and ksvalidator on rendered artifacts (Docker)
+	cd $(LAB3) && ./scripts/check_artifacts.sh
+
+# --- housekeeping ----------------------------------------------------------------
+clean: ## Remove generated artifacts, local state and run records (not containers)
+	rm -rf $(LAB3)/out $(LAB2)/reports $(LAB2)/drift-history $(LAB1)/drift-history
+	find $(LAB1) -name .terraform -type d -prune -exec rm -rf {} +
+	find $(LAB1) \( -name 'terraform.tfstate*' -o -name '*.tfplan' -o -name tfplan -o -name .artifacts \
+	  -o -name drift.plan.json \) -prune -exec rm -rf {} +
+	find labs -name __pycache__ -type d -prune -exec rm -rf {} +

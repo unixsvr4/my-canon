@@ -1,0 +1,89 @@
+# =============================================================================
+# CI - every job calls a Makefile target, so CI and a laptop run identical
+# commands. Tool versions match the versions the labs were verified with.
+#
+#   static-and-unit   make ci             no Docker: fmt, validate, tflint, trivy,
+#                                         terraform test, for_each demos,
+#                                         ansible-lint, syntax, lab 3 unit tests
+#   ansible           make lab2-up lab2-test
+#                                         real containers: converge, idempotence,
+#                                         input contract, anti-pattern demo, drift cycle
+#   bare-metal        make lab3-artifacts dhcpd -t and ksvalidator on rendered files
+# =============================================================================
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.16.1"
+  TFLINT_VERSION: "v0.61.0"
+  TRIVY_VERSION: "0.74.0"
+  ANSIBLE_CORE_VERSION: "2.21.4"
+  ANSIBLE_LINT_VERSION: "26.8.0"
+
+jobs:
+  static-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false   # the wrapper rewrites exit codes; drift checks depend on them
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: Install trivy
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible tooling
+        run: pip install "ansible-core==${ANSIBLE_CORE_VERSION}" "ansible-lint==${ANSIBLE_LINT_VERSION}" pyyaml
+
+      - name: make ci
+        run: make ci
+
+  ansible:
+    runs-on: ubuntu-latest
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: pip install "ansible-core==${ANSIBLE_CORE_VERSION}"
+
+      - name: Create lab hosts
+        run: make lab2-up
+
+      - name: Converge, idempotence, input contract, anti-patterns, drift
+        run: make lab2-test
+
+      - name: Rolling patch demo
+        run: make lab2-patch-demo
+
+  bare-metal:
+    runs-on: ubuntu-latest
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate rendered DHCP and kickstart files with the real parsers
+        run: make lab3-artifacts
