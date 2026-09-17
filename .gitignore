@@ -1,0 +1,12 @@
+# macOS / editors
+.DS_Store
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# Local secrets must never be committed, even by accident
+*.pem
+*.key
+.env

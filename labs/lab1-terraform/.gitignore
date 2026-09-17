@@ -1,0 +1,21 @@
+# Terraform working files
+.terraform/
+terraform.tfstate*
+*.tfplan
+tfplan
+
+# Stand-in resources written by the lab
+.artifacts/
+
+# Drift tooling output (local evidence, not source)
+drift-history/
+drift.plan.json
+
+# Example scratch directories
+.work/
+
+# Lock files are committed for ROOTS (envs/dev, envs/prod) to pin provider
+# builds per environment. A reusable module must not pin its callers, and the
+# examples use no providers.
+modules/**/.terraform.lock.hcl
+examples/**/.terraform.lock.hcl
