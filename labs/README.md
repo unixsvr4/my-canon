@@ -4,7 +4,7 @@ Three self-contained labs, one per layer of an infrastructure platform. Everythi
 
 | Lab | Layer | Runs on | Headline results (all verified) |
 |---|---|---|---|
-| [`lab1-terraform/`](lab1-terraform/) | resources: does it exist, what is it attached to | Terraform only | 12 `terraform test` runs; 4 `for_each` demos; drift exit 2 → 0 with the record kept |
+| [`lab1-terraform/`](lab1-terraform/) | resources: does it exist, what is it attached to | Terraform only | 16 `terraform test` runs (12 plan, 4 apply); both envs applied, verified, tampered, remediated and destroyed; 4 `for_each` demos; drift exit 2 → 0 with the record kept |
 | [`lab2-ansible/`](lab2-ansible/) | inside the machine | Ansible + Docker | idempotent role (0 changes on run 2, 6 hosts); 8 bad inputs rejected; rolling patch stops after 3 hosts; `ansible-lint` production profile |
 | [`lab3-baremetal/`](lab3-baremetal/) | the physical build | Python (+ Docker for real-parser checks) | one source of truth → kickstarts, DHCP, Ansible inventory; 20 unit tests; `dhcpd -t` and `ksvalidator` pass |
 
@@ -34,7 +34,7 @@ The same `baseline` role configures a server whether lab 3's pipeline built it o
 ## Suggested order
 
 1. **Lab 2**: the richest. Role design, idempotence, safe rollouts, drift. About 45 minutes.
-2. **Lab 1**: `for_each` and the module tests. About 45 minutes.
+2. **Lab 1**: `for_each`, the module tests, and verifying live environments. About 50 minutes.
 3. **Lab 3**: the build pipeline and its validation. About 25 minutes.
 
 Or, from the repository root: `make ci` (about 20 seconds, no Docker), then `make all`.

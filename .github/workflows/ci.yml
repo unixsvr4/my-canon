@@ -2,9 +2,11 @@
 # CI - every job calls a Makefile target, so CI and a laptop run identical
 # commands. Tool versions match the versions the labs were verified with.
 #
-#   static-and-unit   make ci             no Docker: fmt, validate, tflint, trivy,
-#                                         terraform test, for_each demos,
-#                                         ansible-lint, syntax, lab 3 unit tests
+#   static-and-unit   make ci lab1-e2e    no Docker: fmt, validate, tflint, trivy,
+#                                         terraform test (plan + apply), for_each demos,
+#                                         ansible-lint, syntax, lab 3 unit tests;
+#                                         then apply, verify, tamper, remediate and
+#                                         destroy both Terraform environments
 #   ansible           make lab2-up lab2-test
 #                                         real containers: converge, idempotence,
 #                                         input contract, anti-pattern demo, drift cycle
@@ -56,6 +58,9 @@ jobs:
 
       - name: make ci
         run: make ci
+
+      - name: Terraform environments - apply, verify, tamper, remediate, destroy
+        run: make lab1-e2e
 
   ansible:
     runs-on: ubuntu-latest

@@ -5,8 +5,8 @@ Working, tested examples of how a hybrid infrastructure platform is **built, con
 Prepared for the **canon** infrastructure automation engineering interview loop. Everything runs locally at **$0**.
 
 ```bash
-make ci      # ~20s, no Docker: lint, validate, 12 terraform tests, 4 for_each demos, 20 unit tests
-make all     # + Docker: converge 6 hosts, idempotence, input contract, drift, rolling patch, real parsers
+make ci      # ~20s, no Docker: lint, validate, 16 terraform tests, 4 for_each demos, 20 unit tests
+make all     # + apply/verify/tamper/destroy both Terraform envs; Docker: converge 6 hosts, idempotence, drift, rolling patch, real parsers
 ```
 
 ---
@@ -26,8 +26,9 @@ make all     # + Docker: converge 6 hosts, idempotence, input contract, drift, r
 
 - A module that walks through `for_each` over a map of objects, a **flattened nested map** with composite keys (`api-443`), a **filtered map** (zero instances when nothing matches), and **another resource's instances**.
 - Four runnable demos with measured results. Removing one list item with `count` replaces 2 resources and destroys 1; with `for_each` it destroys exactly 1. Positional keys inside `for_each` replaced 4 firewall rules just to *add* one CIDR. A `count` → `for_each` migration with **`moved` blocks: 3 moves, 0 changes, identical object ids**.
-- **12 native `terraform test` runs**, including guard-rail tests that were **mutation-checked** (remove the guard and the test fails).
-- A real bug caught and fixed: one shared `random_id` silently re-coupled every service, so removing one replaced all of them. There's a regression test for it now.
+- **16 native `terraform test` runs**: 12 plan-time unit tests and 4 **apply-time integration tests** that create the stack, read every object back, change one service, remove one, replace the datastore, and destroy it. Every assertion **mutation-checked** (break the module and the test fails).
+- **The environments are tested after apply, not just applied.** `verify-env.py` checks every live object exists, still matches state, is wired correctly and meets prod policy, and that nothing unmanaged sits beside it. `tamper-env.sh` proves it: a hand-scaled service, a world-writable datastore and a hand-made "hotfix" object all fail verification, and **two of the three survive a successful `terraform apply`** because `plan` can't see them.
+- Two real bugs caught and fixed, each with a regression test: one shared `random_id` silently re-coupled every service, so removing one replaced all of them; and `create_before_destroy` on a fixed-name datastore made `-replace` **delete it while reporting success** — found by the post-apply verifier.
 
 **Ansible — a reusable, provably idempotent role** ([lab 2](labs/lab2-ansible/))
 

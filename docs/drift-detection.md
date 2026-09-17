@@ -14,6 +14,17 @@ Drift is any difference between what is running and what the code says. It occur
 
 Terraform can't see inside a machine, and Ansible has no state to diff resources against. A platform needs both.
 
+## What a plan can't see
+
+`terraform plan` only compares attributes the provider reads back, for resources in state. Two kinds of drift are invisible to it — Lab 1 reproduces both:
+
+| Blind spot | In the lab | On a cloud | Caught by |
+|---|---|---|---|
+| an attribute the provider doesn't refresh | datastore file made world-writable: plan says *No changes*, apply leaves it | a console-added rule on a security group whose rules are separate resources; a manually attached IAM policy | `verify-env.py` `integrity`; fixed with `-replace` |
+| an object that isn't in state at all | a hand-made `canon-prod-hotfix.json` beside the managed objects | an instance launched by hand in a managed subnet | `verify-env.py` `unmanaged`; delete it, or `import` it into code |
+
+So the drift job runs two checks: the plan, and a verification of the live environment (`labs/lab1-terraform/verify-env.py`) that inspects the real objects and inventories what exists beyond state.
+
 ## Signal
 
 A detector is only useful if a scheduler can act on its exit code.

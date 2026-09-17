@@ -8,10 +8,18 @@ The production root: same module, same version, stricter inputs.
 - `deletion_protection = true`, plus a `Compliance` tag.
 
 ```bash
-terraform init && terraform plan
+terraform init && terraform plan -out=tfplan && terraform apply tfplan && terraform output
 ```
 
 Expected: 15 resources — 3 services, 3 listeners (`api-443`, `api-8443`, `web-443`), 2 public endpoints, 3 runbooks, 3 deploy ids, 1 datastore.
+
+Then verify the live environment. In prod the policy check also enforces replicas ≥ 2 and deletion protection **on the built objects**:
+
+```bash
+../../verify-env.py envs/prod
+```
+
+`../../tamper-env.sh envs/prod` breaks it three ways for the verifier to catch (Lab 1 README, Exercise B). Tear down with `terraform destroy -auto-approve` (15 destroyed), then `../../verify-env.py --destroyed envs/prod`.
 
 Try breaking a guard rail (the plan fails with a readable message; nothing is applied):
 

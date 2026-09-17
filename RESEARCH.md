@@ -47,10 +47,13 @@ Reproduce everything automated with `make all`. Results as run:
 |---|---|---|
 | Terraform static | `make lab1-static` | fmt clean; 8 roots `validate` OK; `tflint` rc=0 on all 8 |
 | Terraform scan | `make lab1-scan` | trivy: 0 misconfigurations (local-only resources; the gate exists for real providers) |
-| Module tests | `make lab1-test` | 12 passed, 0 failed |
+| Module tests | `make lab1-test` | 16 passed, 0 failed (12 plan + 4 apply), ~2 s |
 | Guard-rail mutation | remove prod replica precondition / `:latest` validation in a scratch copy | the matching test fails in each case |
+| Integration mutation | 7 mutations: shared deploy-id keepers, wrong listener target, HTTP listeners, hard-coded image, deletion protection off, `web` not removed, `create_before_destroy` restored | each turns at least one apply run red (table in `modules/app_stack/tests/README.md`) |
+| Live environments | `make lab1-e2e` | dev 9 + prod 15 applied; `verify-env.py` 6/6 on both; tamper → 3 checks fail; `apply` → 2 still fail; delete + `-replace` → 6/6; destroy 9 + 15; `--destroyed` 2/2 on both; ~7 s |
+| Verifier mutation | 6 out-of-band changes to live prod: delete a listener, scale api to 1, unmanaged file, rewire a listener to worker over HTTP, chmod 666, deletion protection off + tag removed | every one fails the named checks (`exists`/`wiring`/`outputs`; `integrity`/`policy`; `unmanaged`; `integrity`/`wiring`/`policy`; `integrity`; `integrity`/`policy`) |
 | `for_each` examples | `make tf-examples` | 01: count 2 replace + 1 destroy vs for_each 1 destroy · 02: unknown-key error reproduced; budget change updates 1 key · 03: add CIDR → stable 2 creates, positional 4 replaces · 04: without `moved` 3 destroy + 3 create; with `moved` 3 moves, same object id |
-| Env roots | `terraform plan` | dev 9 resources, prod 15 |
+| Env roots | `terraform plan` / `apply` / `destroy` | dev 9 resources, prod 15 |
 | `for_each` isolation | plan removing `web` / bumping `api` image | only `web`'s 4 resources / only `api`'s 3 resources |
 | Terraform drift | tamper → `drift-check.sh` → apply → `drift-check.sh` | exit 2 + record → exit 0, record kept |
 | Ansible lint | `make lab2-static` | production profile: 0 failures |
@@ -84,6 +87,10 @@ Reproduce everything automated with `make all`. Results as run:
 | T8 | A `sed` meant to change an image tag matched nothing, so a test "passed" while testing nothing | re-reading the output | re-run against the real value; lesson applied in `tamper.sh` |
 | T9 | Example 04's cleanup left `.work/` behind: the trap used a relative path after `cd` | `ls` after the demo | absolute path |
 | T10 | `terraform import` isn't supported by `local_file` | trying it | `import` block shown as reference; `-replace` demonstrated live |
+| T11 | `create_before_destroy = true` on the fixed-name datastore: `apply -replace` created the new file, then destroyed the old one **at the same path**. `Apply complete! 1 added, 1 destroyed`, resource in state, nothing on disk | `verify-env.py` `exists` check after a remediation | lifecycle block removed; integration run `replace_datastore` (mutation-checked) |
+| T12 | Prod was only ever *planned* in the README walkthrough, so cleanup reported `0 destroyed` for prod and nothing had tested a live environment | a user running cleanup | Exercise A applies both roots; Exercise B verifies them; `make lab1-e2e` runs the lifecycle |
+| T13 | Permission drift is invisible to Terraform: `local_file` doesn't refresh file mode, so `plan` said *No changes* on a 0666 datastore and `apply` didn't fix it | `verify-env.py` still failing after a successful apply | documented as a plan blind spot; `integrity` check compares mode; remediated with `-replace` |
+| T14 | With the datastore missing, the verifier derived the environment from it and reported every object as mis-tagged | reading the failure output | environment taken from the first readable object |
 
 ### Ansible
 

@@ -230,7 +230,12 @@ resource "local_file" "stateful_store" {
     tags                = local.common_tags
   })
 
-  lifecycle {
-    create_before_destroy = true
-  }
+  # Deliberately NO create_before_destroy. This object has a FIXED identity (its
+  # name). An earlier version set create_before_destroy = true, and
+  # `terraform apply -replace` on it created the new file, then destroyed the old
+  # one - at the same path - leaving nothing on disk while state and the apply
+  # both reported success. verify-env.py caught it (see RESEARCH.md, T11); the
+  # integration test's replace_datastore run guards it now. On AWS the same
+  # mistake fails as "DBInstanceAlreadyExists". create_before_destroy is only
+  # safe when the replacement gets a new name (name_prefix, random suffix).
 }

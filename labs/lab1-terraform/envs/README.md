@@ -24,4 +24,10 @@ The cost is a few duplicated lines (`main.tf`, `variables.tf`). Those lines are 
 cd dev && terraform init && terraform plan -out=tfplan && terraform apply tfplan
 ```
 
+```bash
+cd .. && ../verify-env.py envs/dev
+```
+
+The same two commands work for `prod`. An apply that exits 0 is where testing starts, not where it ends: `verify-env.py` checks that every object exists, still matches state, is wired correctly and meets environment policy, and that nothing unmanaged sits beside it.
+
 Stand-in resources are written to `<root>/.artifacts/` (gitignored). `path.root` in the module points there, so dev and prod never write to each other's files.

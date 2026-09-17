@@ -15,4 +15,10 @@ terraform init && terraform plan -out=tfplan && terraform apply tfplan && terraf
 
 Expected: 9 resources — 2 services, 2 listeners (`api-8080`, `web-8080`), 0 public endpoints, 2 runbooks, 2 deploy ids, 1 datastore.
 
-This is also the root that `../../drift-check.sh envs/dev` checks in Exercise E.
+Then test what was built, not just that the apply succeeded:
+
+```bash
+../../verify-env.py envs/dev
+```
+
+This is also the root that `../../drift-check.sh envs/dev` checks in Exercise F. Tear it down with `terraform destroy -auto-approve` (9 destroyed), then `../../verify-env.py --destroyed envs/dev`.

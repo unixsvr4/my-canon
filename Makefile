@@ -26,6 +26,7 @@ unexport TF_LOG TF_LOG_PATH
 
 .PHONY: help ci all check test \
         lab1-static lab1-test tf-examples lab1-scan \
+        lab1-up lab1-verify lab1-verify-demo lab1-down lab1-e2e \
         lab2-static lab2-up lab2-test lab2-idempotence-demo lab2-patch-demo lab2-drift-demo lab2-down \
         lab3-static lab3-test lab3-artifacts clean
 
@@ -34,7 +35,7 @@ help: ## List targets
 
 ci: check test ## Static checks + tests that need no Docker (what CI runs)
 
-all: ci lab2-up lab2-test lab2-patch-demo lab3-artifacts ## Everything, including Docker-backed checks
+all: ci lab1-e2e lab2-up lab2-test lab2-patch-demo lab3-artifacts ## Everything, including Docker-backed checks
 
 check: lab1-static lab1-scan lab2-static lab3-static ## All static checks
 
@@ -51,11 +52,44 @@ lab1-static: ## terraform fmt -check, init -backend=false, validate, tflint on e
 lab1-scan: ## trivy config scan of the Terraform code (misconfiguration gate)
 	trivy config --quiet --exit-code 1 $(LAB1)
 
-lab1-test: ## terraform test on the app_stack module (12 plan-only runs)
+lab1-test: ## terraform test on the app_stack module (12 plan runs + 4 apply runs)
 	cd $(LAB1)/modules/app_stack && terraform init -backend=false -input=false >/dev/null && terraform test -no-color
 
 tf-examples: ## Run the four for_each demos (self-cleaning)
 	@for e in $(TF_EXAMPLES); do ./$(LAB1)/examples/$$e/demo.sh || exit 1; done
+
+lab1-up: ## Apply dev and prod from reviewed, saved plans
+	@for e in dev prod; do \
+	  echo "== envs/$$e"; \
+	  (cd $(LAB1)/envs/$$e && terraform init -input=false >/dev/null && \
+	   terraform plan -input=false -no-color -out=tfplan | grep -E '^Plan:|^No changes' && \
+	   terraform apply -input=false -no-color tfplan | grep -E '^Apply complete') || exit 1; \
+	done
+
+lab1-verify: ## Post-apply verification of the live dev and prod environments
+	cd $(LAB1) && ./verify-env.py envs/dev && ./verify-env.py envs/prod
+
+lab1-verify-demo: ## Tamper with prod; verify must fail; remediate step by step until it passes
+	cd $(LAB1) && ./tamper-env.sh envs/prod
+	cd $(LAB1) && if ./verify-env.py envs/prod; then echo "ERROR: verify passed on a tampered environment"; exit 1; fi
+	@echo "== remediation 1: terraform apply (fixes what plan can see)"
+	cd $(LAB1)/envs/prod && terraform apply -input=false -no-color -auto-approve | grep -E '^Apply complete'
+	cd $(LAB1) && if ./verify-env.py envs/prod; then echo "ERROR: apply should not fix unmanaged objects or permissions"; exit 1; fi
+	@echo "== remediation 2: delete the unmanaged object, -replace the object with drifted permissions"
+	rm $(LAB1)/envs/prod/.artifacts/canon-prod-hotfix.json
+	cd $(LAB1)/envs/prod && terraform apply -input=false -no-color -auto-approve \
+	  -replace='module.app_stack.local_file.stateful_store' | grep -E '^Apply complete'
+	cd $(LAB1) && ./verify-env.py envs/prod
+
+lab1-down: ## Destroy dev and prod, then prove nothing was left behind
+	@for e in dev prod; do \
+	  echo "== envs/$$e"; \
+	  (cd $(LAB1)/envs/$$e && terraform init -input=false >/dev/null && \
+	   terraform destroy -input=false -no-color -auto-approve | grep -E '^Destroy complete') || exit 1; \
+	done
+	cd $(LAB1) && ./verify-env.py --destroyed envs/dev && ./verify-env.py --destroyed envs/prod
+
+lab1-e2e: lab1-up lab1-verify lab1-verify-demo lab1-down ## Full lifecycle: apply, verify, tamper, remediate, destroy
 
 # --- Lab 2: Ansible ------------------------------------------------------------
 lab2-static: ## ansible-lint (production profile) + syntax checks

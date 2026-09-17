@@ -20,7 +20,8 @@ A service stack, modelled with `$0` local resources whose **structure** is what 
 - **Filtered map.** `{ for k, v in var.services : k => v if v.public }` makes a resource conditional *per key*. In dev nothing is public and the resource has zero instances — no `count` ternary needed.
 - **`for_each` over another resource.** `for_each = local_file.service` iterates that resource's instances: the keys match, and `each.value` is the resource object, so apply-time attributes are available. Adding a service automatically adds its runbook.
 - **No `for_each`.** A datastore has its own lifecycle. Putting it in the services map would leave stateful data one tfvars typo away from a destroy.
-- **Dependencies keyed like their consumers.** `random_id.deploy` is per service. A single shared id once coupled every service together — see the regression test and the Lab 1 README, Exercise B.
+- **No `create_before_destroy` on a fixed name.** It once sat on the datastore: `-replace` created the new object, then destroyed the old one at the same path, and left nothing behind while reporting success. The integration test `replace_datastore` guards it.
+- **Dependencies keyed like their consumers.** `random_id.deploy` is per service. A single shared id once coupled every service together — see the regression test and the Lab 1 README, Exercise C.
 
 ## Inputs
 
@@ -78,4 +79,4 @@ module "app_stack" {
 terraform init && terraform test
 ```
 
-See [`tests/README.md`](tests/README.md).
+16 runs: 12 plan-time unit tests and 4 apply-time integration tests that create the stack, read it back, change it, and destroy it. See [`tests/README.md`](tests/README.md).

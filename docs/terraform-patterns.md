@@ -64,7 +64,7 @@ Terraform isn't transactional. Resources that succeeded are in state; one resour
 | state corrupted or wrongly edited | restore the previous object version from the versioned bucket |
 | lock left behind | confirm the run is dead, then `force-unlock` |
 
-**Rollback** is re-applying the last known-good commit, almost never `terraform destroy`. The real protections come earlier: small blast-radius roots, stateful resources in their own roots with `prevent_destroy`, `create_before_destroy` where a replacement would cause an outage, and reading plans for *destroy* before approving them.
+**Rollback** is re-applying the last known-good commit, almost never `terraform destroy`. The real protections come earlier: small blast-radius roots, stateful resources in their own roots with `prevent_destroy`, `create_before_destroy` where a replacement would cause an outage (only when the replacement gets a new name — on a fixed-name object the destroy deletes the replacement), and reading plans for *destroy* before approving them.
 
 ## 7. Testing
 
@@ -73,5 +73,6 @@ Terraform isn't transactional. Resources that succeeded are in state; one resour
 | format, validity | `terraform fmt -check`, `validate` | CI |
 | lint | `tflint` | CI, all roots clean |
 | contract tests (plan-only) | `terraform test` with `expect_failures` | 12 runs, guard rails mutation-checked |
+| integration tests (apply, read back, destroy) | `terraform test` with `command = apply`; Terratest in a sandbox account | 4 lifecycle runs: create, update one key, remove one key, replace; mutation-checked |
+| post-apply verification of a live environment | a smoke stage after every apply: describe calls, target health, a request through each endpoint | `verify-env.py`: exists, integrity, unmanaged, wiring, policy, outputs; proven by `tamper-env.sh` |
 | behaviour examples | `examples/*/demo.sh` | CI |
-| real-resource tests | Terratest / `terraform test` with `command = apply` in a sandbox account | not included ($0 constraint) |
