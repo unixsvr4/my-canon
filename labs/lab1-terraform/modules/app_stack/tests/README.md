@@ -27,10 +27,5 @@ Every run uses `command = plan`, so nothing is created. The suite is fast, free,
 
 ## Two things worth knowing about `terraform test`
 
-- **A plan-only assertion can't read apply-time values.** An early version asserted on a service's rendered
-  `content`, which embeds a random id, and failed with *"Condition expression could not be evaluated at this
-  time."* Assert on what is known at plan (keys, variables, filenames), or use `command = apply` for runs that need
-  computed values.
-- **`expect_failures` tests need a mutation check.** A run that expects a failure passes whenever *something*
-  fails. Temporarily removing the guard and watching the test go red is the only way to know it tests that guard.
-  This was done for the prod precondition and the `:latest` validation.
+- **A plan-only assertion can't read apply-time values.** An early version asserted on a service's rendered `content`, which embeds a random id, and failed with *"Condition expression could not be evaluated at this time."* Assert on what is known at plan (keys, variables, filenames), or use `command = apply` for runs that need computed values.
+- **`expect_failures` tests need a mutation check.** A run that expects a failure passes whenever *something* fails. Temporarily removing the guard and watching the test go red is the only way to know it tests that guard. This was done for the prod precondition and the `:latest` validation.

@@ -1,15 +1,13 @@
 # 04 — migrating `count` → `for_each` with `moved` blocks
 
-Example 01 shows why `count` is the wrong tool. This one handles what happens next: the `count` version is already
-deployed and holding real state, and you need to refactor it **without destroying anything**.
+Example 01 shows why `count` is the wrong tool. This one handles what happens next: the `count` version is already deployed and holding real state, and you need to refactor it **without destroying anything**.
 
 | Directory | Contents |
 |---|---|
 | [`v1/`](v1/) | the legacy code: `count = length(var.users)` |
 | [`v2/`](v2/) | the refactor: `for_each = var.users`, plus `moved.tf` |
 
-Changing `count` to `for_each` changes every address (`user[0]` → `user["alice"]`). Terraform treats a new address as
-a new object, so without help this *pure refactor* plans a full destroy and recreate.
+Changing `count` to `for_each` changes every address (`user[0]` → `user["alice"]`). Terraform treats a new address as a new object, so without help this *pure refactor* plans a full destroy and recreate.
 
 ## Run
 
@@ -17,8 +15,7 @@ a new object, so without help this *pure refactor* plans a full destroy and recr
 ./demo.sh
 ```
 
-The demo deploys v1 in a scratch directory, applies the v2 refactor twice (without and then with `moved.tf`), and
-compares object ids before and after.
+The demo deploys v1 in a scratch directory, applies the v2 refactor twice (without and then with `moved.tf`), and compares object ids before and after.
 
 ## Results (verified)
 
@@ -47,8 +44,6 @@ compares object ids before and after.
 | applies itself in **every** environment that runs the code | must be repeated by hand against every state file |
 | survives in history as documentation of the refactor | leaves no trace in code |
 
-**Keep `moved` blocks for at least one release**, until every environment has applied past them. If a block is removed
-before a lagging environment applies it, that environment gets the destroy-and-recreate plan after all.
+**Keep `moved` blocks for at least one release**, until every environment has applied past them. If a block is removed before a lagging environment applies it, that environment gets the destroy-and-recreate plan after all.
 
-The same mechanism handles moving resources into a module (`to = module.users.terraform_data.user`) and renaming
-modules.
+The same mechanism handles moving resources into a module (`to = module.users.terraform_data.user`) and renaming modules.

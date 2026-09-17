@@ -39,13 +39,11 @@ Both maps feed a resource. They describe the same six rules and differ only in t
 | stable | **1 destroy**: `web:80:0.0.0.0/0` |
 | positional | 1 replace + 1 destroy, and far more churn if the removed item is near the front |
 
-`for_each` is not what protects you — the **key** is. A positional key inside `for_each` is `count`'s bug in disguise.
-On a live security group, those replacements are windows in which traffic is dropped.
+`for_each` is not what protects you — the **key** is. A positional key inside `for_each` is `count`'s bug in disguise. On a live security group, those replacements are windows in which traffic is dropped.
 
 ## `dynamic` blocks — the same expansion inside one resource
 
-When the provider models rules as nested blocks, use `dynamic`. This is included as a commented reference in
-`main.tf`, since this example uses no cloud provider:
+When the provider models rules as nested blocks, use `dynamic`. This is included as a commented reference in `main.tf`, since this example uses no cloud provider:
 
 ```hcl
 dynamic "ingress" {
@@ -59,6 +57,4 @@ dynamic "ingress" {
 }
 ```
 
-The trade-off: inline blocks change as **one attribute**, so any edit rewrites the group's rule set. Separate rule
-resources (`aws_vpc_security_group_ingress_rule`) give you per-rule plans, per-rule drift detection, and per-rule
-blast radius, which is usually worth it when rules change often.
+The trade-off: inline blocks change as **one attribute**, so any edit rewrites the group's rule set. Separate rule resources (`aws_vpc_security_group_ingress_rule`) give you per-rule plans, per-rule drift detection, and per-rule blast radius, which is usually worth it when rules change often.

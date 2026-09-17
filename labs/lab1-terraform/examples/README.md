@@ -1,8 +1,6 @@
 # examples/ — `for_each`, in four runnable scenarios
 
-Each example is a standalone root using only Terraform's built-in `terraform_data` resource. They need no providers,
-no network access, and cost nothing. Every `demo.sh` runs its scenario, prints a one-line-per-resource plan summary,
-and **cleans up after itself**, so it can be re-run any number of times.
+Each example is a standalone root using only Terraform's built-in `terraform_data` resource. They need no providers, no network access, and cost nothing. Every `demo.sh` runs its scenario, prints a one-line-per-resource plan summary, and **cleans up after itself**, so it can be re-run any number of times.
 
 | # | Example | The question it answers | Key result |
 |---|---|---|---|
@@ -31,11 +29,8 @@ Requires `terraform` ≥ 1.6 and `jq`. From the repository root, `make tf-exampl
 
 ## The rules these examples add up to
 
-1. **Use `for_each` for anything with an identity.** Use `count` only for identical, fungible copies — and for the
-   `count = var.enabled ? 1 : 0` toggle.
-2. **The key is the design.** `for_each` protects you only if the key comes from the data's identity (a name, or
-   `service:port:cidr`). A key built from a list index (`"rule-${i}"`) brings back count's re-indexing bug.
+1. **Use `for_each` for anything with an identity.** Use `count` only for identical, fungible copies — and for the `count = var.enabled ? 1 : 0` toggle.
+2. **The key is the design.** `for_each` protects you only if the key comes from the data's identity (a name, or `service:port:cidr`). A key built from a list index (`"rule-${i}"`) brings back count's re-indexing bug.
 3. **Keys must be known at plan time.** Key on names from configuration and put computed values in `each.value`.
 4. **Convert lists deliberately.** `{ for x in list : x.name => x }` — and let a duplicate name fail loudly.
-5. **Refactor with `moved` blocks, not `terraform state mv`.** The move is reviewed in the PR and happens
-   automatically in every environment that applies the code.
+5. **Refactor with `moved` blocks, not `terraform state mv`.** The move is reviewed in the PR and happens automatically in every environment that applies the code.

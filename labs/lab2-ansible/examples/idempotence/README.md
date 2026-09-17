@@ -57,8 +57,7 @@ IDEMPOTENT: 1 host(s), zero changes on the second run.
 
 ## Linting is not enough
 
-With the `production` profile, ansible-lint flags **five** of the six tasks, run against a copy outside this repo's
-exclude list:
+With the `production` profile, ansible-lint flags **five** of the six tasks, run against a copy outside this repo's exclude list:
 
 ```text
 line 18: no-changed-when            # 1  echo >>
@@ -71,11 +70,7 @@ line 51: no-changed-when            # 6  venv
 
 Two things stand out:
 
-- **Task 3 isn't flagged at all.** A timestamp inside `copy` content is perfectly valid syntax. Only running the play
-  twice reveals it.
-- **Most findings are `no-changed-when`, and the easy way to silence that rule is wrong.** Adding
-  `changed_when: false` to the `echo >>` task makes the linter pass while the file keeps growing. The rule points at
-  a symptom; the idempotence test measures the behaviour.
+- **Task 3 isn't flagged at all.** A timestamp inside `copy` content is perfectly valid syntax. Only running the play twice reveals it.
+- **Most findings are `no-changed-when`, and the easy way to silence that rule is wrong.** Adding `changed_when: false` to the `echo >>` task makes the linter pass while the file keeps growing. The rule points at a symptom; the idempotence test measures the behaviour.
 
-So lint on every commit, and also run a converge-twice test (this script, or Molecule's `idempotence` step) on every
-role change.
+So lint on every commit, and also run a converge-twice test (this script, or Molecule's `idempotence` step) on every role change.

@@ -1,7 +1,6 @@
 # Architecture: who owns which layer
 
-An estate that mixes physical servers, virtual machines and cloud runs well only when every layer has exactly one
-owner, and the handoffs between owners are explicit, automated and re-runnable.
+An estate that mixes physical servers, virtual machines and cloud runs well only when every layer has exactly one owner, and the handoffs between owners are explicit, automated and re-runnable.
 
 ```mermaid
 flowchart LR
@@ -42,16 +41,12 @@ flowchart LR
 
 ## The boundary between Terraform and Ansible
 
-**Terraform stops when the machine boots.** Ansible *can* create VMs, and Terraform *can* run provisioners, but each is
-worse at the other's job:
+**Terraform stops when the machine boots.** Ansible *can* create VMs, and Terraform *can* run provisioners, but each is worse at the other's job:
 
 - Terraform's state gives a real diff and a drift signal (`plan -detailed-exitcode`). Ansible has no equivalent state.
-- Ansible gives ordered, batched, health-gated rollouts (`serial`, `max_fail_percentage`, handlers). Terraform applies a
-  graph with no notion of "one canary, then 5, then 25%".
+- Ansible gives ordered, batched, health-gated rollouts (`serial`, `max_fail_percentage`, handlers). Terraform applies a graph with no notion of "one canary, then 5, then 25%".
 
-Anti-pattern: a `local-exec` provisioner that calls `ansible-playbook`. Configuration failures get hidden from state,
-one half can't be re-run without the other, and the apply's success no longer means what it says. The two are separate
-pipeline steps, each independently re-runnable.
+Anti-pattern: a `local-exec` provisioner that calls `ansible-playbook`. Configuration failures get hidden from state, one half can't be re-run without the other, and the apply's success no longer means what it says. The two are separate pipeline steps, each independently re-runnable.
 
 ## The handoffs
 
@@ -66,7 +61,4 @@ pipeline steps, each independently re-runnable.
 
 ## Same roles everywhere
 
-Keeping the OS install thin means the layer above the hardware stops caring whether it *is* hardware. The `baseline`
-role in lab 2 runs unchanged on a container, a VM, or a server built by lab 3's pipeline. Only the connection
-settings differ. Divergence between physical and virtual estates shows up in configuration code first, so one role
-library for both is what keeps a hybrid estate manageable.
+Keeping the OS install thin means the layer above the hardware stops caring whether it *is* hardware. The `baseline` role in lab 2 runs unchanged on a container, a VM, or a server built by lab 3's pipeline. Only the connection settings differ. Divergence between physical and virtual estates shows up in configuration code first, so one role library for both is what keeps a hybrid estate manageable.

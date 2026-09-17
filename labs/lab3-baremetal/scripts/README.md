@@ -24,13 +24,8 @@
 
 - **`out/ks/<mac>.cfg`**: named for iPXE's `${mac:hexhyp}`, so the boot script needs no per-host logic.
 - **`out/dhcpd-hosts.conf`**: `host` reservations, included once at global scope by `ipxe/dhcpd.conf.snippet`.
-- **`out/inventory.yml`**: the handoff. Groups: `rhel9`, `newly_built` (what `acceptance.yml` targets), one group
-  per role (`gateway`, `database`) and per rack (`rack_dc1_r14`). `expected_ip` is carried for the acceptance
-  assertions, so the build and its test share one source.
+- **`out/inventory.yml`**: the handoff. Groups: `rhel9`, `newly_built` (what `acceptance.yml` targets), one group per role (`gateway`, `database`) and per rack (`rack_dc1_r14`). `expected_ip` is carried for the acceptance assertions, so the build and its test share one source.
 
 ## `bmc_baseline.sh`
 
-Points at a BMC that doesn't exist in this lab. Read it, don't run it. It shows the out-of-band sequence as API calls:
-identify the system, inventory firmware (drift between "identical" servers usually hides there), PATCH BIOS
-attributes from a template, set a one-time PXE boot and reset. That is "rebuild" as an API call, with credentials from a
-vault and never hard-coded.
+Points at a BMC that doesn't exist in this lab. Read it, don't run it. It shows the out-of-band sequence as API calls: identify the system, inventory firmware (drift between "identical" servers usually hides there), PATCH BIOS attributes from a template, set a one-time PXE boot and reset. That is "rebuild" as an API call, with credentials from a vault and never hard-coded.

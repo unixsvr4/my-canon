@@ -1,10 +1,6 @@
 # Lab 1 — Terraform: modules, `for_each`, tests, drift and recovery
 
-Runs entirely on your machine with the `local`, `random` and built-in `terraform_data` providers. **No cloud
-account, no credentials, $0.** Each resource is a small file standing in for a cloud resource (the mapping is at the
-top of [`modules/app_stack/main.tf`](modules/app_stack/main.tf)), so you get the real Terraform workflow — module
-design, environment roots, `for_each` addressing, native tests, drift detection, and state recovery — without
-paying for it.
+Runs entirely on your machine with the `local`, `random` and built-in `terraform_data` providers. **No cloud account, no credentials, $0.** Each resource is a small file standing in for a cloud resource (the mapping is at the top of [`modules/app_stack/main.tf`](modules/app_stack/main.tf)), so you get the real Terraform workflow — module design, environment roots, `for_each` addressing, native tests, drift detection, and state recovery — without paying for it.
 
 ## What this lab demonstrates
 
@@ -42,12 +38,9 @@ Every directory has its own README explaining its piece in more depth.
 
 ## Prerequisites
 
-Terraform ≥ 1.6 (verified on 1.16.1), `jq`, Python 3. From the repository root, `make lab1-test` runs the
-module tests and `make tf-examples` runs all four examples.
+Terraform ≥ 1.6 (verified on 1.16.1), `jq`, Python 3. From the repository root, `make lab1-test` runs the module tests and `make tf-examples` runs all four examples.
 
-> **Shell note.** If `TF_WORKSPACE` is set in your environment, Terraform stores local state under
-> `terraform.tfstate.d/<workspace>/` instead of `terraform.tfstate`. Everything still works; it is just where the
-> state file ends up. (This lab deliberately uses directories, not workspaces, to separate environments.)
+> **Shell note.** If `TF_WORKSPACE` is set in your environment, Terraform stores local state under `terraform.tfstate.d/<workspace>/` instead of `terraform.tfstate`. Everything still works; it is just where the state file ends up. (This lab deliberately uses directories, not workspaces, to separate environments.)
 
 ---
 
@@ -63,9 +56,7 @@ cd envs/dev && terraform init && terraform plan -out=tfplan
 terraform apply tfplan && terraform output
 ```
 
-You applied a **saved plan file**, not a fresh plan. That is the production pattern: the pull request shows a
-specific diff, a human approves that diff, and CI applies exactly that file. Re-planning at apply time can pick up
-changes nobody reviewed.
+You applied a **saved plan file**, not a fresh plan. That is the production pattern: the pull request shows a specific diff, a human approves that diff, and CI applies exactly that file. Re-planning at apply time can pick up changes nobody reviewed.
 
 Now plan prod — same module, different inputs:
 
@@ -73,9 +64,7 @@ Now plan prod — same module, different inputs:
 cd ../prod && terraform init && terraform plan
 ```
 
-dev plans 9 resources and prod plans 15. The difference is data, not code: prod has three services, two of them
-public with ports, and every extra resource comes from `for_each` expanding that input — 3 deploy ids, 3 services,
-3 listeners (`api-443`, `api-8443`, `web-443`), 2 public endpoints, 3 runbooks, and the one datastore.
+dev plans 9 resources and prod plans 15. The difference is data, not code: prod has three services, two of them public with ports, and every extra resource comes from `for_each` expanding that input — 3 deploy ids, 3 services, 3 listeners (`api-443`, `api-8443`, `web-443`), 2 public endpoints, 3 runbooks, and the one datastore.
 
 ## Exercise B — the `for_each` tour
 
@@ -98,8 +87,7 @@ Every address contains a **name**, not a position. Prove it matters — remove `
 terraform plan -var 'services={api={image="api:1.4.2",cpu=256,memory=512,ports=[8080]}}'
 ```
 
-Exactly `web`'s four resources are destroyed: its service, listener, runbook and deploy id. `api` is untouched. Now
-bump only `api`'s image:
+Exactly `web`'s four resources are destroyed: its service, listener, runbook and deploy id. `api` is untouched. Now bump only `api`'s image:
 
 ```bash
 terraform plan -var 'services={api={image="api:1.5.0",cpu=256,memory=512,ports=[8080]},web={image="web:2.1.0",cpu=256,memory=512,ports=[8080]}}'
@@ -107,12 +95,7 @@ terraform plan -var 'services={api={image="api:1.5.0",cpu=256,memory=512,ports=[
 
 Only `api`'s resources change.
 
-> **A bug this lab caught, and why it is instructive.** The first version of the module had *one* `random_id` for
-> the whole stack, with `keepers` set to the list of service names, and every service embedded it. Removing `web`
-> changed that one id — and **replaced `api` too**. `for_each` had isolated the services; a single shared dependency
-> silently coupled them again. The fix was to key the dependency exactly like its consumers
-> (`random_id.deploy[each.key]`), and a regression test now guards it. When a plan touches keys you didn't change,
-> look for a shared upstream value.
+> **A bug this lab caught, and why it is instructive.** The first version of the module had *one* `random_id` for the whole stack, with `keepers` set to the list of service names, and every service embedded it. Removing `web` changed that one id — and **replaced `api` too**. `for_each` had isolated the services; a single shared dependency silently coupled them again. The fix was to key the dependency exactly like its consumers (`random_id.deploy[each.key]`), and a regression test now guards it. When a plan touches keys you didn't change, look for a shared upstream value.
 
 ## Exercise C — native tests
 
@@ -120,13 +103,9 @@ Only `api`'s resources change.
 cd modules/app_stack && terraform init && terraform test
 ```
 
-12 runs, all `command = plan` — nothing is created, so it is fast enough for every pull request. Half the suite
-asserts what `for_each` produces (keys, composite keys, filters, zero-instance cases). The other half uses
-`expect_failures` to prove the guard rails **reject** bad input.
+12 runs, all `command = plan` — nothing is created, so it is fast enough for every pull request. Half the suite asserts what `for_each` produces (keys, composite keys, filters, zero-instance cases). The other half uses `expect_failures` to prove the guard rails **reject** bad input.
 
-A test that expects a failure is only worth something if it would fail without the guard. Both kinds were checked
-by mutation: deleting the prod replica precondition, or the `:latest` tag validation, makes the corresponding test
-fail (see `RESEARCH.md`).
+A test that expects a failure is only worth something if it would fail without the guard. Both kinds were checked by mutation: deleting the prod replica precondition, or the `:latest` tag validation, makes the corresponding test fail (see `RESEARCH.md`).
 
 ## Exercise D — guard rails fail in plan, not in apply
 
@@ -148,8 +127,7 @@ Error: Invalid value for variable
   every service image needs an explicit, immutable tag (name:1.2.3), never :latest or untagged.
 ```
 
-The reviewer sees a readable error in the pull request, rather than an API error twenty minutes into an apply that
-has already changed half an environment.
+The reviewer sees a readable error in the pull request, rather than an API error twenty minutes into an apply that has already changed half an environment.
 
 ## Exercise E — drift detection with a record that outlives the fix
 
@@ -159,8 +137,7 @@ Simulate an out-of-band change, then check:
 echo '{"tampered":true}' > envs/dev/.artifacts/canon-dev-api.json && ./drift-check.sh envs/dev; echo "exit=$?"
 ```
 
-`terraform plan -detailed-exitcode` returns **0** (no changes), **1** (error) or **2** (drift). The script turns exit 2
-into a permanent record:
+`terraform plan -detailed-exitcode` returns **0** (no changes), **1** (error) or **2** (drift). The script turns exit 2 into a permanent record:
 
 ```text
 [DRIFT] envs/dev: infrastructure does not match code
@@ -179,15 +156,9 @@ Remediate by re-applying the code, then check again. The environment is clean, a
 
 Why it is built this way:
 
-- **The record survives remediation.** "What changed, when did we notice, how long was it that way" can only be
-  answered if applying the fix doesn't also erase the evidence. Each record is `plan.txt` (for a human or a ticket)
-  plus `plan.json` (for a policy engine such as OPA/conftest), made read-only on write, with a row in
-  `drift-history/index.csv`.
-- **The binary plan is not kept by default.** A `.tfplan` is valid only against the state serial that produced it,
-  and it holds every attribute in the clear, secrets included. `KEEP_PLAN=1` retains it on purpose; otherwise it
-  is deleted.
-- **Tampering showed up as `+ create`, not an update.** `local_file`'s ID is the SHA-1 of its content, so refresh
-  concluded the resource was gone — the same shape as a cloud resource someone deleted by hand.
+- **The record survives remediation.** "What changed, when did we notice, how long was it that way" can only be answered if applying the fix doesn't also erase the evidence. Each record is `plan.txt` (for a human or a ticket) plus `plan.json` (for a policy engine such as OPA/conftest), made read-only on write, with a row in `drift-history/index.csv`.
+- **The binary plan is not kept by default.** A `.tfplan` is valid only against the state serial that produced it, and it holds every attribute in the clear, secrets included. `KEEP_PLAN=1` retains it on purpose; otherwise it is deleted.
+- **Tampering showed up as `+ create`, not an update.** `local_file`'s ID is the SHA-1 of its content, so refresh concluded the resource was gone — the same shape as a cloud resource someone deleted by hand.
 
 ## Exercise F — recovering state
 
@@ -197,8 +168,7 @@ Why it is built this way:
 cd envs/dev && terraform state rm 'module.app_stack.local_file.service["api"]' && terraform plan
 ```
 
-Terraform now plans to *create* `api` again. On a real provider that duplicate would collide on its name, so the fix
-is to **adopt** the existing object. Declaratively, since Terraform 1.5, in the root:
+Terraform now plans to *create* `api` again. On a real provider that duplicate would collide on its name, so the fix is to **adopt** the existing object. Declaratively, since Terraform 1.5, in the root:
 
 ```hcl
 import {
@@ -207,8 +177,7 @@ import {
 }
 ```
 
-An `import` block is reviewed in the PR and shows up in `plan` like any other change, which is why it beats running
-`terraform import` by hand. (The `local` provider doesn't implement import, so here you simply re-apply.)
+An `import` block is reviewed in the PR and shows up in `plan` like any other change, which is why it beats running `terraform import` by hand. (The `local` provider doesn't implement import, so here you simply re-apply.)
 
 **Something exists but can't be trusted** (half-configured, hand-edited):
 
@@ -228,8 +197,7 @@ A replacement in prod should be its own deliberate change, never a side effect o
 
 ## Exercise G — the `for_each` examples
 
-Four self-contained roots, each with a `demo.sh` that runs the scenario, prints a one-line-per-resource plan
-summary, and cleans up after itself. Details in [`examples/README.md`](examples/README.md).
+Four self-contained roots, each with a `demo.sh` that runs the scenario, prints a one-line-per-resource plan summary, and cleans up after itself. Details in [`examples/README.md`](examples/README.md).
 
 ```bash
 ./examples/01-count-vs-for-each/demo.sh

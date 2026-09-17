@@ -1,20 +1,15 @@
 # Bare-metal lifecycle: rack to production to decommission
 
-Lab: [`labs/lab3-baremetal`](../labs/lab3-baremetal/). The lab README covers the artifacts, the generated handoff and
-the failure-mode table; this document covers the lifecycle and the reasoning.
+Lab: [`labs/lab3-baremetal`](../labs/lab3-baremetal/). The lab README covers the artifacts, the generated handoff and the failure-mode table; this document covers the lifecycle and the reasoning.
 
 ## Principles
 
-1. **The record exists before the power cord goes in.** Rack, U, serial, MACs and BMC address are entered into the
-   CMDB/DCIM at racking. A server that isn't in the source of truth at racking tends to become an orphan.
-2. **Out-of-band first.** Once the BMC is reachable with unique credentials on an isolated OOB network, nobody needs
-   to be in the building again.
+1. **The record exists before the power cord goes in.** Rack, U, serial, MACs and BMC address are entered into the CMDB/DCIM at racking. A server that isn't in the source of truth at racking tends to become an orphan.
+2. **Out-of-band first.** Once the BMC is reachable with unique credentials on an isolated OOB network, nobody needs to be in the building again.
 3. **Nothing decided at a console.** Firmware, BIOS, RAID, addressing and install profile all come from data.
-4. **Keep the OS install thin.** The installer produces a reachable machine and hands it to configuration
-   management. Configuration applied during install runs once and is never checked again.
+4. **Keep the OS install thin.** The installer produces a reachable machine and hands it to configuration management. Configuration applied during install runs once and is never checked again.
 5. **"Installer finished" isn't "done".** Acceptance tests decide.
-6. **A rebuild is cheap.** A broken server gets rebuilt from PXE rather than repaired by hand, so every server stays
-   reproducible.
+6. **A rebuild is cheap.** A broken server gets rebuilt from PXE rather than repaired by hand, so every server stays reproducible.
 
 ## Stages
 
@@ -35,10 +30,7 @@ the failure-mode table; this document covers the lifecycle and the reasoning.
 
 ## Latency-sensitive builds
 
-For workloads where microseconds matter, some settings are part of the **build standard** rather than tuning applied
-later: a performance power profile, deep C-states disabled (in BIOS and on the kernel command line), deliberate
-hyper-threading and NUMA choices, and NIC firmware pinned. Encoding them in the Redfish template and the kickstart
-means every rebuild gets them.
+For workloads where microseconds matter, some settings are part of the **build standard** rather than tuning applied later: a performance power profile, deep C-states disabled (in BIOS and on the kernel command line), deliberate hyper-threading and NUMA choices, and NIC firmware pinned. Encoding them in the Redfish template and the kickstart means every rebuild gets them.
 
 ## Tooling
 
@@ -50,5 +42,4 @@ means every rebuild gets them.
 | out-of-band | Redfish (vendor-neutral), `racadm`, iLO REST |
 | Windows imaging | WDS/MDT or Configuration Manager + `Autounattend.xml` (see `labs/lab3-baremetal/windows/`) |
 
-Under every product sit the same primitives: a source of truth, DHCP, a bootloader, an answer file and configuration
-management. That is why this pipeline's design transfers to whichever product fronts it.
+Under every product sit the same primitives: a source of truth, DHCP, a bootloader, an answer file and configuration management. That is why this pipeline's design transfers to whichever product fronts it.

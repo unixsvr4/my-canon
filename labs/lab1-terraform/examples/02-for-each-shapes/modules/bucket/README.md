@@ -12,7 +12,4 @@ module "bucket" {
 }
 ```
 
-The design rule it illustrates: **a module describes one thing; the caller decides how many.** There is no
-`for_each` inside it and no knowledge of how many copies exist. Instances are addressed
-`module.bucket["payments"].terraform_data.bucket`, and `module.bucket` itself is a map you can iterate in outputs:
-`{ for team, m in module.bucket : team => m.name }`.
+The design rule it illustrates: **a module describes one thing; the caller decides how many.** There is no `for_each` inside it and no knowledge of how many copies exist. Instances are addressed `module.bucket["payments"].terraform_data.bucket`, and `module.bucket` itself is a map you can iterate in outputs: `{ for team, m in module.bucket : team => m.name }`.

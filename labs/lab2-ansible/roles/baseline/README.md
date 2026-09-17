@@ -1,10 +1,8 @@
 # Role: `baseline`
 
-Converges a RHEL-family host to the platform baseline: packages, admin access, sshd hardening, time sync, kernel
-parameters and the login banner. Then it **verifies the effective configuration**, not just the files it wrote.
+Converges a RHEL-family host to the platform baseline: packages, admin access, sshd hardening, time sync, kernel parameters and the login banner. Then it **verifies the effective configuration**, not just the files it wrote.
 
-Designed to be **reused unchanged** across host types, environments and platforms (containers, VMs, bare metal), and
-to be **idempotent**: a second run reports zero changes, which `tests/idempotence.sh` proves on every host.
+Designed to be **reused unchanged** across host types, environments and platforms (containers, VMs, bare metal), and to be **idempotent**: a second run reports zero changes, which `tests/idempotence.sh` proves on every host.
 
 ```yaml
 - name: Converge Linux hosts to the platform baseline
@@ -37,8 +35,7 @@ baseline/
 
 ## Variables
 
-All variables are prefixed `baseline_`. Full types and choices are in
-[`meta/argument_specs.yml`](meta/argument_specs.yml).
+All variables are prefixed `baseline_`. Full types and choices are in [`meta/argument_specs.yml`](meta/argument_specs.yml).
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -61,32 +58,27 @@ All variables are prefixed `baseline_`. Full types and choices are in
 
 ## Tags
 
-`baseline` (everything) · `baseline_validate` · `baseline_packages` · `baseline_access` · `baseline_ssh` ·
-`baseline_time` · `baseline_sysctl` · `baseline_motd` · `baseline_verify`
+`baseline` (everything) · `baseline_validate` · `baseline_packages` · `baseline_access` · `baseline_ssh` · `baseline_time` · `baseline_sysctl` · `baseline_motd` · `baseline_verify`
 
 ```bash
 ansible-playbook site.yml --tags baseline_ssh --limit web01
 ```
 
-Sections are pulled in with `import_tasks` (static), so tags on the import apply to every task inside. With
-`include_tasks` (dynamic), `--tags baseline_ssh` would skip the include and none of the SSH tasks would run.
+Sections are pulled in with `import_tasks` (static), so tags on the import apply to every task inside. With `include_tasks` (dynamic), `--tags baseline_ssh` would skip the include and none of the SSH tasks would run.
 
 ---
 
 ## Reusability
 
-What makes one role serve web, db and app hosts, dev and prod, containers and bare metal, **without a single
-conditional on host type**:
+What makes one role serve web, db and app hosts, dev and prod, containers and bare metal, **without a single conditional on host type**:
 
 ### 1. All behaviour is driven by prefixed variables with safe defaults
 
-The role never checks `if 'db' in group_names`. Differences between host types live in inventory as data
-(`inventory/group_vars/db.yml`), so adding a new tier needs no change to the role.
+The role never checks `if 'db' in group_names`. Differences between host types live in inventory as data (`inventory/group_vars/db.yml`), so adding a new tier needs no change to the role.
 
 ### 2. The `_extra` merge pattern
 
-Ansible **replaces** dictionaries and lists at higher precedence; it doesn't merge them. If `group_vars/db.yml` set
-`baseline_sysctl`, db hosts would silently lose every default kernel parameter. So each collection comes in two parts:
+Ansible **replaces** dictionaries and lists at higher precedence; it doesn't merge them. If `group_vars/db.yml` set `baseline_sysctl`, db hosts would silently lose every default kernel parameter. So each collection comes in two parts:
 
 ```yaml
 # role default (role-owned)            # group_vars/db.yml (caller-owned)
@@ -99,35 +91,27 @@ baseline_sysctl:                       baseline_sysctl_extra:
 {% for key, value in (baseline_sysctl | combine(baseline_sysctl_extra)) | dictsort %}
 ```
 
-`tasks/validate.yml` refuses an `_extra` key that redefines a role-owned key. Overriding a default should be a visible
-decision (set `baseline_sysctl`), never a side effect.
+`tasks/validate.yml` refuses an `_extra` key that redefines a role-owned key. Overriding a default should be a visible decision (set `baseline_sysctl`), never a side effect.
 
 ### 3. The input contract is enforced, not documented
 
-`meta/argument_specs.yml` is checked by ansible-core before the first task. A typo or wrong type fails immediately,
-with a message, instead of rendering a broken config across a fleet. `tests/input-validation.sh` exercises 8 bad
-inputs.
+`meta/argument_specs.yml` is checked by ansible-core before the first task. A typo or wrong type fails immediately, with a message, instead of rendering a broken config across a fleet. `tests/input-validation.sh` exercises 8 bad inputs.
 
 ### 4. It runs where its assumptions don't hold
 
-- Minimal images have no `/etc/sysctl.d` and no `sysctl` binary, so the role creates the directory and installs
-  `procps-ng`.
+- Minimal images have no `/etc/sysctl.d` and no `sysctl` binary, so the role creates the directory and installs `procps-ng`.
 - Containers have no systemd, so handlers check `ansible_facts['service_mgr']` and skip reloads instead of failing.
-- Containers share the host kernel, so `baseline_sysctl_apply: false` still manages the file (and detects drift) but
-  doesn't load it.
+- Containers share the host kernel, so `baseline_sysctl_apply: false` still manages the file (and detects drift) but doesn't load it.
 
 ### 5. No dependencies, handler names namespaced
 
-`meta/main.yml` declares `dependencies: []`, so composition happens in playbooks where it is visible. Handlers are named
-`Baseline | reload sshd`, so combining roles in one play can't trigger another role's handler by accident.
+`meta/main.yml` declares `dependencies: []`, so composition happens in playbooks where it is visible. Handlers are named `Baseline | reload sshd`, so combining roles in one play can't trigger another role's handler by accident.
 
 ---
 
 ## Idempotence
 
-**Idempotent means a second run against a correct host changes nothing.** That isn't cosmetic. A play that always
-reports `changed` restarts services for no reason, and it can't tell a correct host from a drifted one, so its drift
-report is noise.
+**Idempotent means a second run against a correct host changes nothing.** That isn't cosmetic. A play that always reports `changed` restarts services for no reason, and it can't tell a correct host from a drifted one, so its drift report is noise.
 
 The techniques the role uses, and where:
 
@@ -159,19 +143,13 @@ tests/idempotence.sh            # converge, then run 2 must report changed=0 on 
 
 ### Why the role verifies the *effective* configuration
 
-The AlmaLinux 9 image ships `/etc/ssh/sshd_config.d/25-permitrootlogin.conf` with `PermitRootLogin yes`. sshd reads
-drop-ins in lexical order, and **the first value wins**. A hardening drop-in named `50-` or `99-` is written correctly,
-every task reports success, and `sshd -T` still shows `permitrootlogin yes`.
+The AlmaLinux 9 image ships `/etc/ssh/sshd_config.d/25-permitrootlogin.conf` with `PermitRootLogin yes`. sshd reads drop-ins in lexical order, and **the first value wins**. A hardening drop-in named `50-` or `99-` is written correctly, every task reports success, and `sshd -T` still shows `permitrootlogin yes`.
 
-The role handles this in two ways. The drop-in is named `10-baseline.conf`, and `verify.yml` asserts on `sshd -T`
-output, so any future file that sorts earlier fails the run loudly. Lab 2 README, Step 5, reproduces it.
+The role handles this in two ways. The drop-in is named `10-baseline.conf`, and `verify.yml` asserts on `sshd -T` output, so any future file that sorts earlier fails the run loudly. Lab 2 README, Step 5, reproduces it.
 
-Verification is **skipped in check mode**. Nothing was converged, so on a drifted host the effective config is still
-the drifted one; failing there would turn a drift finding into an "incomplete run".
+Verification is **skipped in check mode**. Nothing was converged, so on a drifted host the effective config is still the drifted one; failing there would turn a drift finding into an "incomplete run".
 
 ## Known limits
 
-- RHEL-family only (`package` + dnf, `/etc/chrony.conf` path, `procps-ng`). Debian support would add per-OS vars files
-  loaded with `include_vars` on `ansible_facts['os_family']`.
-- Removing an admin user needs `state: absent` for at least one run before the entry is deleted from inventory.
-  Ansible manages only what it is told about.
+- RHEL-family only (`package` + dnf, `/etc/chrony.conf` path, `procps-ng`). Debian support would add per-OS vars files loaded with `include_vars` on `ansible_facts['os_family']`.
+- Removing an admin user needs `state: absent` for at least one run before the entry is deleted from inventory. Ansible manages only what it is told about.

@@ -1,11 +1,8 @@
 # Lab 3 — Bare metal: from a MAC address to a production-ready server
 
-A server factory is a pipeline in which **no build-day decision is made by a human at a console**. This lab holds the
-artifacts of that pipeline: one source-of-truth file, the files generated from it, the network-boot configuration
-that consumes them, and the tests that prove each one is valid.
+A server factory is a pipeline in which **no build-day decision is made by a human at a console**. This lab holds the artifacts of that pipeline: one source-of-truth file, the files generated from it, the network-boot configuration that consumes them, and the tests that prove each one is valid.
 
-No physical hardware is involved. The generated artifacts are checked by unit tests, and validated by the **same
-parsers the real systems use**, ISC `dhcpd -t` and the installer's `ksvalidator`, in a throwaway container.
+No physical hardware is involved. The generated artifacts are checked by unit tests, and validated by the **same parsers the real systems use**, ISC `dhcpd -t` and the installer's `ksvalidator`, in a throwaway container.
 
 ## The pipeline
 
@@ -61,8 +58,7 @@ canon-db01   3c:ec:ef:11:23:01  ->  out/ks/3c-ec-ef-11-23-01.cfg
              ansible handoff    ->  out/inventory.yml
 ```
 
-The kickstart filename **is** the MAC, which is exactly the path `ipxe/boot.ipxe` requests (`ks/${mac:hexhyp}.cfg`).
-A unit test pins that contract.
+The kickstart filename **is** the MAC, which is exactly the path `ipxe/boot.ipxe` requests (`ks/${mac:hexhyp}.cfg`). A unit test pins that contract.
 
 ### Bad data never reaches a build
 
@@ -78,9 +74,7 @@ refusing to render: hosts.yml has 2 error(s)
   - canon-db01: gateway 10.20.4.1 is not in 10.20.5.0/24 - the host could never reach it
 ```
 
-Every error is reported at once, and nothing is rendered. Two servers answering to one MAC, or a database whose
-gateway is on another subnet, is the kind of mistake that otherwise turns up at 3 a.m., on a console, in a data
-centre nobody can get into.
+Every error is reported at once, and nothing is rendered. Two servers answering to one MAC, or a database whose gateway is on another subnet, is the kind of mistake that otherwise turns up at 3 a.m., on a console, in a data centre nobody can get into.
 
 ### Tests
 
@@ -88,9 +82,7 @@ centre nobody can get into.
 python3 -m unittest discover -s tests -v
 ```
 
-20 tests: the committed `hosts.yml` is valid; the validator rejects ten kinds of bad record; rendered artifacts have no
-unrendered placeholders, carry the right identity and network, and match the iPXE request path; the stdlib YAML
-fallback matches PyYAML. See [`tests/README.md`](tests/README.md).
+20 tests: the committed `hosts.yml` is valid; the validator rejects ten kinds of bad record; rendered artifacts have no unrendered placeholders, carry the right identity and network, and match the iPXE request path; the stdlib YAML fallback matches PyYAML. See [`tests/README.md`](tests/README.md).
 
 ### Validate with the real parsers
 
@@ -105,8 +97,7 @@ PASS  ksvalidator RHEL9: 3c-ec-ef-11-22-34.cfg
 PASS  ksvalidator RHEL9: 3c-ec-ef-11-23-01.cfg
 ```
 
-This check exists because unit tests only prove the renderer does what was *intended*. When first run, it found three
-bugs that no unit test could see:
+This check exists because unit tests only prove the renderer does what was *intended*. When first run, it found three bugs that no unit test could see:
 
 | Found by | Bug | Effect on a real build |
 |---|---|---|
@@ -118,21 +109,13 @@ Each fix carries a comment, and the line-continuation case also has a unit test,
 
 ## What in these files shows operational experience
 
-1. **`boot.ipxe` refuses to build an unregistered MAC.** Anything not in the source of truth gets a message, not an
-   operating system. That single rule prevents orphan servers.
-2. **The DHCP config tests the iPXE user-class.** Without it the chainload loops forever: the NIC ROM loads iPXE, iPXE
-   asks DHCP again, gets iPXE again, and so on.
-3. **iPXE fetches over HTTP, not TFTP.** TFTP has no windowing and stalls on congested or high-latency links; a large
-   initrd over TFTP is how builds hang at 47%.
-4. **The kickstart pins the disk layout explicitly** (`clearpart --all`, explicit LVs), so a rebuild produces an
-   identical layout. Twin servers must actually be twins.
-5. **C-state limits are in the bootloader line.** For latency-sensitive workloads, deep C-state exit latency is part of
-   the build standard, not something someone remembers to set afterwards.
-6. **`%post` does almost nothing.** It installs a key and calls a registration endpoint. Everything else is Ansible,
-   because a `%post` block runs once and is invisible drift forever after.
-7. **Acceptance is part of the build.** A build isn't done when the installer finishes; it is done when
-   `acceptance.yml` passes: kernel, identity, disk layout, bond members up, NTP synchronised, agents running, required
-   endpoints reachable.
+1. **`boot.ipxe` refuses to build an unregistered MAC.** Anything not in the source of truth gets a message, not an operating system. That single rule prevents orphan servers.
+2. **The DHCP config tests the iPXE user-class.** Without it the chainload loops forever: the NIC ROM loads iPXE, iPXE asks DHCP again, gets iPXE again, and so on.
+3. **iPXE fetches over HTTP, not TFTP.** TFTP has no windowing and stalls on congested or high-latency links; a large initrd over TFTP is how builds hang at 47%.
+4. **The kickstart pins the disk layout explicitly** (`clearpart --all`, explicit LVs), so a rebuild produces an identical layout. Twin servers must actually be twins.
+5. **C-state limits are in the bootloader line.** For latency-sensitive workloads, deep C-state exit latency is part of the build standard, not something someone remembers to set afterwards.
+6. **`%post` does almost nothing.** It installs a key and calls a registration endpoint. Everything else is Ansible, because a `%post` block runs once and is invisible drift forever after.
+7. **Acceptance is part of the build.** A build isn't done when the installer finishes; it is done when `acceptance.yml` passes: kernel, identity, disk layout, bond members up, NTP synchronised, agents running, required endpoints reachable.
 
 ## Debugging a failed build, bottom-up
 
@@ -149,12 +132,8 @@ Work in dependency order, and read each stage's log before touching the next:
 | builds fine, behaves unlike its twin | firmware or BIOS drift | Redfish firmware inventory diff |
 | everything works, nothing monitors it | handoff/registration failed silently | the registration callback log; `acceptance.yml` |
 
-If the DHCP server never saw the request, the problem is the switch port, the VLAN or the helper address. If it did,
-the problem is downstream.
+If the DHCP server never saw the request, the problem is the switch port, the VLAN or the helper address. If it did, the problem is downstream.
 
 ## Production tooling
 
-The same primitives sit under the products: **Foreman/Katello** or **MAAS** for lifecycle and templated provisioning,
-**OpenStack Ironic** or **Tinkerbell** for API-driven bare metal, **NetBox/Nautobot** as the source of truth, and
-**Redfish** as the vendor-neutral out-of-band API. DHCP, a bootloader, an answer file and configuration management are
-underneath all of them, which is why understanding this pipeline transfers to whichever product fronts it.
+The same primitives sit under the products: **Foreman/Katello** or **MAAS** for lifecycle and templated provisioning, **OpenStack Ironic** or **Tinkerbell** for API-driven bare metal, **NetBox/Nautobot** as the source of truth, and **Redfish** as the vendor-neutral out-of-band API. DHCP, a bootloader, an answer file and configuration management are underneath all of them, which is why understanding this pipeline transfers to whichever product fronts it.

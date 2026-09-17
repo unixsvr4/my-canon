@@ -1,7 +1,6 @@
 # labs/
 
-Three self-contained labs, one per layer of an infrastructure platform. Everything runs on a laptop at **$0**: no
-cloud account, no credentials, no hardware.
+Three self-contained labs, one per layer of an infrastructure platform. Everything runs on a laptop at **$0**: no cloud account, no credentials, no hardware.
 
 | Lab | Layer | Runs on | Headline results (all verified) |
 |---|---|---|---|
@@ -18,8 +17,7 @@ lab1: Terraform ─► instances + tags (dynamic inventory) ────┘
 lab1: drift-check.sh (infrastructure layer)          lab2: drift-check.sh (OS layer)
 ```
 
-The same `baseline` role configures a server whether lab 3's pipeline built it or Terraform created it. Drift is
-detected at both layers, with the same exit-code contract and the same immutable record format.
+The same `baseline` role configures a server whether lab 3's pipeline built it or Terraform created it. Drift is detected at both layers, with the same exit-code contract and the same immutable record format.
 
 ## Requirements
 

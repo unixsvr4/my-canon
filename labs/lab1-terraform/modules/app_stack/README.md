@@ -1,7 +1,6 @@
 # Module: `app_stack`
 
-A service stack, modelled with `$0` local resources whose **structure** is what you'd write against a cloud
-provider. `main.tf` is laid out as a guided tour of `for_each`, simplest pattern first.
+A service stack, modelled with `$0` local resources whose **structure** is what you'd write against a cloud provider. `main.tf` is laid out as a guided tour of `for_each`, simplest pattern first.
 
 ## Resources and the pattern each one demonstrates
 
@@ -16,21 +15,12 @@ provider. `main.tf` is laid out as a guided tour of `for_each`, simplest pattern
 
 ### Why each pattern exists
 
-- **Map of objects.** The map key becomes the resource address. Removing a service destroys exactly that service;
-  its neighbours keep their addresses and are never touched.
-- **Flatten to a composite key.** `for_each` needs one flat map, and the input is nested (services contain port
-  lists). `flatten()` plus a `for` expression produces `{"api-443" = {...}, "api-8443" = {...}}`. The key is
-  derived from the data (`service-port`), so adding or removing a port changes only that listener. A validation
-  rejects duplicate ports before they can become a duplicate key.
-- **Filtered map.** `{ for k, v in var.services : k => v if v.public }` makes a resource conditional *per key*. In
-  dev nothing is public and the resource has zero instances — no `count` ternary needed.
-- **`for_each` over another resource.** `for_each = local_file.service` iterates that resource's instances: the
-  keys match, and `each.value` is the resource object, so apply-time attributes are available. Adding a service
-  automatically adds its runbook.
-- **No `for_each`.** A datastore has its own lifecycle. Putting it in the services map would leave stateful data one
-  tfvars typo away from a destroy.
-- **Dependencies keyed like their consumers.** `random_id.deploy` is per service. A single shared id once coupled every
-  service together — see the regression test and the Lab 1 README, Exercise B.
+- **Map of objects.** The map key becomes the resource address. Removing a service destroys exactly that service; its neighbours keep their addresses and are never touched.
+- **Flatten to a composite key.** `for_each` needs one flat map, and the input is nested (services contain port lists). `flatten()` plus a `for` expression produces `{"api-443" = {...}, "api-8443" = {...}}`. The key is derived from the data (`service-port`), so adding or removing a port changes only that listener. A validation rejects duplicate ports before they can become a duplicate key.
+- **Filtered map.** `{ for k, v in var.services : k => v if v.public }` makes a resource conditional *per key*. In dev nothing is public and the resource has zero instances — no `count` ternary needed.
+- **`for_each` over another resource.** `for_each = local_file.service` iterates that resource's instances: the keys match, and `each.value` is the resource object, so apply-time attributes are available. Adding a service automatically adds its runbook.
+- **No `for_each`.** A datastore has its own lifecycle. Putting it in the services map would leave stateful data one tfvars typo away from a destroy.
+- **Dependencies keyed like their consumers.** `random_id.deploy` is per service. A single shared id once coupled every service together — see the regression test and the Lab 1 README, Exercise B.
 
 ## Inputs
 
@@ -63,8 +53,7 @@ provider. `main.tf` is laid out as a guided tour of `for_each`, simplest pattern
 | `deploy_ids` | `{ api = "9b0311c3", ... }` |
 | `artifact_dir` | path where the stand-in resources are written |
 
-Outputs are maps keyed like the input. A list built from a `for_each` resource has an ordering nobody should depend
-on.
+Outputs are maps keyed like the input. A list built from a `for_each` resource has an ordering nobody should depend on.
 
 ## Usage
 

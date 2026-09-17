@@ -1,7 +1,6 @@
 # Windows: the same build pipeline, Microsoft tooling in each slot
 
-The Linux pipeline in this lab (source of truth → network boot → unattended install → configuration management →
-acceptance) maps stage for stage onto Windows. The design decisions carry over; only the tools change.
+The Linux pipeline in this lab (source of truth → network boot → unattended install → configuration management → acceptance) maps stage for stage onto Windows. The design decisions carry over; only the tools change.
 
 | Stage | Linux (this lab) | Windows |
 |---|---|---|
@@ -17,14 +16,7 @@ acceptance) maps stage for stage onto Windows. The design decisions carry over; 
 
 ## Details that matter in practice
 
-- **WinRM over HTTPS (5986) with Kerberos.** Not Basic. Avoid **CredSSP** unless there is no alternative: it relies
-  on unconstrained credential delegation, and because it is NTLM-backed it isn't an option under FIPS.
-- **The double-hop problem.** A task on host A that must reach a network resource B fails, because the credential
-  used to reach A can't be delegated onward. Solve it with Kerberos constrained delegation, or by giving the task a
-  credential it can use locally (`become` with `runas`).
-- **DSC and Ansible are complementary.** DSC is the native desired-state engine and gives `Test-DscConfiguration` for
-  free; call good existing DSC resources through `win_dsc` instead of re-implementing them. Ansible adds one
-  inventory, one set of roles and one report across both halves of the estate.
-- **Keep `Autounattend.xml` thin**, like the kickstart: generate it per host from the source of truth, and hand off
-  to configuration management as early as possible. Anything configured in the answer file is configured once and
-  never checked again.
+- **WinRM over HTTPS (5986) with Kerberos.** Not Basic. Avoid **CredSSP** unless there is no alternative: it relies on unconstrained credential delegation, and because it is NTLM-backed it isn't an option under FIPS.
+- **The double-hop problem.** A task on host A that must reach a network resource B fails, because the credential used to reach A can't be delegated onward. Solve it with Kerberos constrained delegation, or by giving the task a credential it can use locally (`become` with `runas`).
+- **DSC and Ansible are complementary.** DSC is the native desired-state engine and gives `Test-DscConfiguration` for free; call good existing DSC resources through `win_dsc` instead of re-implementing them. Ansible adds one inventory, one set of roles and one report across both halves of the estate.
+- **Keep `Autounattend.xml` thin**, like the kickstart: generate it per host from the source of truth, and hand off to configuration management as early as possible. Anything configured in the answer file is configured once and never checked again.

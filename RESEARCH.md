@@ -1,8 +1,6 @@
 # RESEARCH.md — sources, verification, and the bugs found along the way
 
-This file makes the repository reproducible and auditable: which versions were used, where the design guidance comes
-from, how each result was verified, and every defect found while building it, including how it was found. A record of
-bugs caught is more useful than a claim that there were none.
+This file makes the repository reproducible and auditable: which versions were used, where the design guidance comes from, how each result was verified, and every defect found while building it, including how it was found. A record of bugs caught is more useful than a claim that there were none.
 
 ## 1. Environment
 
@@ -20,41 +18,26 @@ bugs caught is more useful than a claim that there were none.
 ## 2. Sources
 
 **Terraform**
-- `for_each`, `count`, and "Invalid for_each argument" (keys known at plan time): Terraform language documentation,
-  *The for_each Meta-Argument*.
-- `moved` blocks for refactoring (Terraform 1.1+) and `import` blocks (1.5+): Terraform documentation, *Refactoring*
-  and *Import*.
+- `for_each`, `count`, and "Invalid for_each argument" (keys known at plan time): Terraform language documentation, *The for_each Meta-Argument*.
+- `moved` blocks for refactoring (Terraform 1.1+) and `import` blocks (1.5+): Terraform documentation, *Refactoring* and *Import*.
 - `terraform test`, `expect_failures`, and plan-time evaluation limits: Terraform documentation, *Tests*.
 - `optional()` object attributes with defaults (1.3+): Terraform documentation, *Type Constraints*.
-- S3-native state locking with `use_lockfile` (1.10+) and deprecation of `dynamodb_table` (1.11):
-  [S3 native state locking](https://www.bschaatsbergen.com/s3-native-state-locking),
-  [explainer](https://dev.to/aws-builders/terraform-state-locking-without-dynamodb-s3-native-locking-explained-448l).
+- S3-native state locking with `use_lockfile` (1.10+) and deprecation of `dynamodb_table` (1.11): [S3 native state locking](https://www.bschaatsbergen.com/s3-native-state-locking), [explainer](https://dev.to/aws-builders/terraform-state-locking-without-dynamodb-s3-native-locking-explained-448l).
 
 **Ansible**
 - Role argument validation (`meta/argument_specs.yml`): Ansible documentation, *Roles — role argument validation*.
-- Rolling updates, `serial`, `max_fail_percentage`: Ansible documentation, *Controlling playbook execution*;
-  [rolling updates and failure controls](https://oneuptime.com/blog/post/2026-07-24-ansible-rolling-updates/view),
-  [max_fail_percentage](https://oneuptime.com/blog/post/2026-02-21-ansible-max-fail-percentage-failure-thresholds/view).
-- Windows over WinRM: transports, CredSSP delegation risk, Kerberos under FIPS, the double hop:
-  [Ansible WinRM documentation](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html).
+- Rolling updates, `serial`, `max_fail_percentage`: Ansible documentation, *Controlling playbook execution*; [rolling updates and failure controls](https://oneuptime.com/blog/post/2026-07-24-ansible-rolling-updates/view), [max_fail_percentage](https://oneuptime.com/blog/post/2026-02-21-ansible-max-fail-percentage-failure-thresholds/view).
+- Windows over WinRM: transports, CredSSP delegation risk, Kerberos under FIPS, the double hop: [Ansible WinRM documentation](https://docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html).
 - sshd reads configuration in order and uses the first value obtained for most keywords: `sshd_config(5)`.
 
 **Bare metal**
-- Kickstart syntax, and the absence of line continuation: `pykickstart` / RHEL 9 installation documentation;
-  confirmed with `ksvalidator -v RHEL9`.
-- iPXE chainloading, the `user-class "iPXE"` loop-breaker, and declaring RFC 4578 option 93 in ISC dhcpd: iPXE
-  documentation, *Chainloading iPXE*; confirmed with `dhcpd -t`.
-- Bare-metal provisioning tooling (Ironic, Foreman, MAAS, Tinkerbell, Redfish):
-  [bare metal automation overview](https://www.atlantic.net/dedicated-server-hosting/bare-metal-automation-provisioning-tools-lifecycle-management/),
-  [provisioning explainer](https://netactuate.com/blog/bare-metal-provisioning).
+- Kickstart syntax, and the absence of line continuation: `pykickstart` / RHEL 9 installation documentation; confirmed with `ksvalidator -v RHEL9`.
+- iPXE chainloading, the `user-class "iPXE"` loop-breaker, and declaring RFC 4578 option 93 in ISC dhcpd: iPXE documentation, *Chainloading iPXE*; confirmed with `dhcpd -t`.
+- Bare-metal provisioning tooling (Ironic, Foreman, MAAS, Tinkerbell, Redfish): [bare metal automation overview](https://www.atlantic.net/dedicated-server-hosting/bare-metal-automation-provisioning-tools-lifecycle-management/), [provisioning explainer](https://netactuate.com/blog/bare-metal-provisioning).
 
 **Platforms**
-- Spacelift concepts (stacks, spaces, Rego policies, drift detection, worker pools):
-  [spacelift.io](https://spacelift.io/terraform-automation),
-  [multicloud governance](https://spacelift.io/blog/spacelift-multicloud).
-- Alibaba Cloud service mapping and the `alicloud` provider:
-  [Terraform overview (ACK)](https://www.alibabacloud.com/help/en/ack/ack-managed-and-ack-dedicated/developer-reference/terraform-overview),
-  [OSS Terraform](https://www.alibabacloud.com/help/en/oss/developer-reference/terraform-overview/).
+- Spacelift concepts (stacks, spaces, Rego policies, drift detection, worker pools): [spacelift.io](https://spacelift.io/terraform-automation), [multicloud governance](https://spacelift.io/blog/spacelift-multicloud).
+- Alibaba Cloud service mapping and the `alicloud` provider: [Terraform overview (ACK)](https://www.alibabacloud.com/help/en/ack/ack-managed-and-ack-dedicated/developer-reference/terraform-overview), [OSS Terraform](https://www.alibabacloud.com/help/en/oss/developer-reference/terraform-overview/).
 
 ## 3. Verification log
 
@@ -135,10 +118,7 @@ Reproduce everything automated with `make all`. Results as run:
 
 ## 5. Known limits
 
-- Lab resources are local stand-ins. Real-provider behaviour (API errors, eventual consistency, provider-specific
-  ForceNew attributes) is described, not exercised.
-- Lab hosts are containers without systemd or their own kernel, so service reloads and `sysctl -p` are skipped by
-  design. Those handler paths run on VMs and physical hosts.
-- `bmc_baseline.sh` and `acceptance.yml` target hardware that doesn't exist here; they are syntax-checked and linted,
-  not executed.
+- Lab resources are local stand-ins. Real-provider behaviour (API errors, eventual consistency, provider-specific ForceNew attributes) is described, not exercised.
+- Lab hosts are containers without systemd or their own kernel, so service reloads and `sysctl -p` are skipped by design. Those handler paths run on VMs and physical hosts.
+- `bmc_baseline.sh` and `acceptance.yml` target hardware that doesn't exist here; they are syntax-checked and linted, not executed.
 - The CI workflow calls the verified `make` targets but hasn't yet run on GitHub-hosted runners.

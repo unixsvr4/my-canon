@@ -1,8 +1,6 @@
 # Lab 2 — Ansible: a reusable, idempotent role, safe rollouts, and drift detection
 
-Six throwaway containers stand in for six servers. No VMs, no SSH keys, no cost. The containers don't matter here:
-**the role design, the rollout structure and the tests are the substance**, and they are identical on VMs or
-physical hardware. Only the connection settings in `inventory/group_vars/all.yml` would change.
+Six throwaway containers stand in for six servers. No VMs, no SSH keys, no cost. The containers don't matter here: **the role design, the rollout structure and the tests are the substance**, and they are identical on VMs or physical hardware. Only the connection settings in `inventory/group_vars/all.yml` would change.
 
 ## What this lab demonstrates
 
@@ -40,8 +38,7 @@ lab2-ansible/
 
 ## Prerequisites
 
-`ansible-core` ≥ 2.15 (verified on 2.21.4), Docker, Python 3. `setup.sh` installs the pinned collections.
-From the repository root, `make lab2-up` then `make lab2-test` runs everything below.
+`ansible-core` ≥ 2.15 (verified on 2.21.4), Docker, Python 3. `setup.sh` installs the pinned collections. From the repository root, `make lab2-up` then `make lab2-test` runs everything below.
 
 ---
 
@@ -63,9 +60,7 @@ ansible linux -m ping
 ansible-playbook site.yml
 ```
 
-`site.yml` is five lines: `hosts: linux` and `roles: [baseline]`. Everything else is data. On the first run the role
-installs packages, creates the `ops` group and `alice`/`bob` (removing `carol`), writes a validated sudoers rule,
-hardens sshd, configures chrony and sysctl, writes the banner, and then **verifies the effective configuration**.
+`site.yml` is five lines: `hosts: linux` and `roles: [baseline]`. Everything else is data. On the first run the role installs packages, creates the `ops` group and `alice`/`bob` (removing `carol`), writes a validated sudoers rule, hardens sshd, configures chrony and sysctl, writes the banner, and then **verifies the effective configuration**.
 
 Look at what each tier received from the same role:
 
@@ -73,8 +68,7 @@ Look at what each tier received from the same role:
 docker exec lab-web01 cat /etc/sysctl.d/90-baseline.conf; docker exec lab-db01 cat /etc/sysctl.d/90-baseline.conf
 ```
 
-web gets `net.core.somaxconn`; db gets `vm.dirty_ratio`. Both keep every role default. That's the `_extra` merge
-pattern — see [`roles/baseline/README.md`](roles/baseline/README.md#reusability).
+web gets `net.core.somaxconn`; db gets `vm.dirty_ratio`. Both keep every role default. That's the `_extra` merge pattern — see [`roles/baseline/README.md`](roles/baseline/README.md#reusability).
 
 ## Step 3 — prove idempotence
 
@@ -99,9 +93,7 @@ ansible-playbook examples/idempotence/reset.yml && tests/idempotence.sh examples
 ansible-playbook examples/idempotence/reset.yml && tests/idempotence.sh examples/idempotence/idempotent.yml
 ```
 
-The broken playbook reports **6 of 6 tasks changed** on a second run, and `/etc/sysctl.d/99-demo.conf` holds the same
-line twice. The fixed playbook reports **0**. [`examples/idempotence/README.md`](examples/idempotence/README.md) walks
-through each pair of tasks.
+The broken playbook reports **6 of 6 tasks changed** on a second run, and `/etc/sysctl.d/99-demo.conf` holds the same line twice. The fixed playbook reports **0**. [`examples/idempotence/README.md`](examples/idempotence/README.md) walks through each pair of tasks.
 
 ## Step 4 — prove the input contract
 
@@ -109,26 +101,21 @@ through each pair of tasks.
 tests/input-validation.sh
 ```
 
-Eight invalid inputs, each rejected **before any task touches a host**, with a message naming the problem. One of them
-is a finding worth knowing: `argument_specs` lets a bare YAML `no` (a boolean) through for an option whose choices
-are `"no"`/`"yes"`. The role catches it with an explicit type assertion in `tasks/validate.yml`.
+Eight invalid inputs, each rejected **before any task touches a host**, with a message naming the problem. One of them is a finding worth knowing: `argument_specs` lets a bare YAML `no` (a boolean) through for an option whose choices are `"no"`/`"yes"`. The role catches it with an explicit type assertion in `tasks/validate.yml`.
 
 ## Step 5 — verify effective config, not files
 
-The vendor image ships `/etc/ssh/sshd_config.d/25-permitrootlogin.conf` containing `PermitRootLogin yes`, and sshd uses
-the **first** value it reads. Name the role's drop-in so it sorts *after* that file, then watch what happens:
+The vendor image ships `/etc/ssh/sshd_config.d/25-permitrootlogin.conf` containing `PermitRootLogin yes`, and sshd uses the **first** value it reads. Name the role's drop-in so it sorts *after* that file, then watch what happens:
 
 ```bash
 docker exec lab-web02 rm -f /etc/ssh/sshd_config.d/10-baseline.conf && ansible-playbook site.yml --limit web02 -e baseline_ssh_dropin=/etc/ssh/sshd_config.d/99-baseline.conf
 ```
 
 ```text
-fatal: [web02]: FAILED! => "sshd's EFFECTIVE configuration does not match the baseline, although the drop-in was
-written ... Effective values: ['maxauthtries 3', 'permitrootlogin yes', 'passwordauthentication no']"
+fatal: [web02]: FAILED! => "sshd's EFFECTIVE configuration does not match the baseline, although the drop-in was written ... Effective values: ['maxauthtries 3', 'permitrootlogin yes', 'passwordauthentication no']"
 ```
 
-Every write task succeeded, and the file says `PermitRootLogin no`, but sshd would still permit root login. Only the
-`sshd -T` check catches this. Put web02 back:
+Every write task succeeded, and the file says `PermitRootLogin no`, but sshd would still permit root login. Only the `sshd -T` check catches this. Put web02 back:
 
 ```bash
 docker exec lab-web02 rm -f /etc/ssh/sshd_config.d/99-baseline.conf && ansible-playbook site.yml --limit web02
@@ -140,9 +127,7 @@ docker exec lab-web02 rm -f /etc/ssh/sshd_config.d/99-baseline.conf && ansible-p
 ansible-playbook patch.yml
 ```
 
-Batches: `web01` alone (canary), then `web02, web03`, then **the run stops**. `web03` is configured to fail its
-post-patch health gate, and `max_fail_percentage: 0` refuses to start the next batch. `db01`, `db02` and `app01` are
-never touched. **A bad change stops after three servers, not three hundred.**
+Batches: `web01` alone (canary), then `web02, web03`, then **the run stops**. `web03` is configured to fail its post-patch health gate, and `max_fail_percentage: 0` refuses to start the next batch. `db01`, `db02` and `app01` are never touched. **A bad change stops after three servers, not three hundred.**
 
 ```bash
 ./summarize.sh && cat reports/quarantine-web03.log
@@ -168,9 +153,7 @@ What the play's structure guarantees, and where:
 | a `fail` task **outside** the block | a failure handled by `rescue` does **not** count toward `max_fail_percentage` — without this the run carries on into the next batch (verified on ansible-core 2.21) |
 | per-host record written in `always` | the record survives an aborted run, which is when you need it most |
 
-Observed detail: the retry file lists `web02` as well as `web03`. When the abort threshold trips, ansible-core writes
-the whole aborted batch to the retry file, including the host that passed. Re-running `web02` is harmless because
-the patch role is idempotent.
+Observed detail: the retry file lists `web02` as well as `web03`. When the abort threshold trips, ansible-core writes the whole aborted batch to the retry file, including the host that passed. Re-running `web02` is harmless because the patch role is idempotent.
 
 ## Step 7 — drift detection with a record that outlives the fix
 
@@ -195,16 +178,11 @@ ansible-playbook site.yml --limit db01 && ./drift-check.sh; ./drift-show.py
 
 Design decisions:
 
-- **Drift = what the baseline role would change.** `drift-check.sh` runs `site.yml --check --diff`, so the definition
-  of "correct" and the definition of "drifted" come from the same code.
-- **`ansible-playbook --check` exits 0 even when it finds drift.** The wrapper reads per-host `changed` counts from the
-  JSON callback and supplies the exit code: **0** clean, **2** drift, **1** incomplete.
-- **Incomplete beats drift.** An unreachable or failed host was *not checked*, and "partially checked, looked fine" is
-  the report that hides the broken box.
-- **Verification is skipped in check mode.** Nothing was converged, so asserting the effective config would fail on
-  every drifted host and turn a DRIFT finding into an INCOMPLETE run.
-- **Records are immutable and survive remediation.** Each is `drift.txt` + `drift.json`, read-only on write, with a
-  row in `drift-history/index.csv`.
+- **Drift = what the baseline role would change.** `drift-check.sh` runs `site.yml --check --diff`, so the definition of "correct" and the definition of "drifted" come from the same code.
+- **`ansible-playbook --check` exits 0 even when it finds drift.** The wrapper reads per-host `changed` counts from the JSON callback and supplies the exit code: **0** clean, **2** drift, **1** incomplete.
+- **Incomplete beats drift.** An unreachable or failed host was *not checked*, and "partially checked, looked fine" is the report that hides the broken box.
+- **Verification is skipped in check mode.** Nothing was converged, so asserting the effective config would fail on every drifted host and turn a DRIFT finding into an INCOMPLETE run.
+- **Records are immutable and survive remediation.** Each is `drift.txt` + `drift.json`, read-only on write, with a row in `drift-history/index.csv`.
 
 ## Lint
 
@@ -216,8 +194,7 @@ ansible-lint
 Passed: 0 failure(s), 0 warning(s) in 40 files processed. Profile 'production' was required, and it passed.
 ```
 
-Two rules are waived inline, with the reason next to each: `package-latest` in the patch role (upgrading *is* the
-point of a patch run) and `command-instead-of-shell` for the health check (real checks are pipelines).
+Two rules are waived inline, with the reason next to each: `package-latest` in the patch role (upgrading *is* the point of a patch run) and `command-instead-of-shell` for the health check (real checks are pipelines).
 
 ## Teardown
 

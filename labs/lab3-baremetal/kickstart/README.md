@@ -1,14 +1,10 @@
 # kickstart/ — the unattended install
 
-`rhel9-min.ks.j2` is rendered once per host by `../scripts/render.py` into `../out/ks/<mac>.cfg`. It uses `{{ key }}`
-placeholders; a placeholder with no value in `hosts.yml` is a **hard error** naming the host and key, never an empty
-string written into an answer file.
+`rhel9-min.ks.j2` is rendered once per host by `../scripts/render.py` into `../out/ks/<mac>.cfg`. It uses `{{ key }}` placeholders; a placeholder with no value in `hosts.yml` is a **hard error** naming the host and key, never an empty string written into an answer file.
 
 ## Design: deliberately thin
 
-The kickstart's only job is to produce a **reachable, minimal, correctly-addressed** machine and hand it to
-configuration management. Everything that could differ between two servers belongs in Ansible, where it is versioned,
-re-runnable and drift-checked. A `%post` block runs once and is never checked again.
+The kickstart's only job is to produce a **reachable, minimal, correctly-addressed** machine and hand it to configuration management. Everything that could differ between two servers belongs in Ansible, where it is versioned, re-runnable and drift-checked. A `%post` block runs once and is never checked again.
 
 | Section | Decision | Why |
 |---|---|---|
