@@ -1,0 +1,52 @@
+# ISC DHCP. Two things here catch most PXE failures:
+#   1. the reservation must exist for the MAC, and
+#   2. the VLAN must have an ip helper-address pointing at this server,
+#      or the DISCOVER never leaves the switch and you see "no DHCP offers".
+
+option space ipxe;
+option ipxe-encap-opts code 175 = encapsulate ipxe;
+option ipxe.no-pxedhcp code 176 = unsigned integer 8;
+
+# RFC 4578 client system architecture (option 93) is NOT predefined in ISC dhcpd
+# - it must be declared before a subnet can branch on it. (An earlier version of
+# this file used an undeclared name; `dhcpd -t` rejects it. Verified with
+# dhcp-server on AlmaLinux 9.) 0x0007 = x64 UEFI, 0x0000 = legacy BIOS.
+option client-arch code 93 = unsigned integer 16;
+
+subnet 10.20.4.0 netmask 255.255.255.0 {
+  option routers 10.20.4.1;
+  option domain-name-servers 10.20.1.10;
+  next-server 10.20.1.20;                 # TFTP/HTTP boot server
+
+  # Break the chainload loop: the NIC ROM asks first and gets iPXE; iPXE asks
+  # again and gets the script. Without this test you loop forever.
+  if exists user-class and option user-class = "iPXE" {
+    filename "http://10.20.1.20/provision/ipxe/boot.ipxe";
+  } elsif option client-arch = 00:07 {
+    filename "ipxe.efi";                  # UEFI x64
+  } else {
+    filename "undionly.kpxe";             # legacy BIOS
+  }
+}
+
+# Database VLAN 250. Same boot logic; a class-less subnet keeps the example short.
+subnet 10.20.5.0 netmask 255.255.255.0 {
+  option routers 10.20.5.1;
+  option domain-name-servers 10.20.1.10;
+  next-server 10.20.1.20;
+
+  if exists user-class and option user-class = "iPXE" {
+    filename "http://10.20.1.20/provision/ipxe/boot.ipxe";
+  } elsif option client-arch = 00:07 {
+    filename "ipxe.efi";
+  } else {
+    filename "undionly.kpxe";
+  }
+}
+
+# Host reservations are GENERATED from hosts.yml, never hand-edited:
+#   ./scripts/render.py  ->  out/dhcpd-hosts.conf
+# Included once at GLOBAL scope: ISC dhcpd host declarations are global (matched
+# by MAC) whatever block they appear in, and the generated file spans every
+# subnet (10.20.4.0/24 gateways, 10.20.5.0/24 databases).
+include "/etc/dhcp/generated/dhcpd-hosts.conf";

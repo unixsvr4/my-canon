@@ -1,0 +1,66 @@
+---
+# A build is NOT finished because the installer finished. This play is what
+# "production-ready" means, expressed as assertions. Half the value of
+# automating a build is that you can then afford to test every single one.
+#
+# Reference: there is no physical host in the lab, so this play is syntax-checked
+# and linted but not executed. It targets `newly_built`, the group that
+# scripts/render.py generates in out/inventory.yml, and reads `expected_ip` from
+# the same generated inventory - so the acceptance test and the build come from
+# one source of truth:
+#
+#   ansible-playbook -i out/inventory.yml acceptance.yml \
+#     -e expected_kernel=5.14.0-427 -e '{"required_agents": ["chronyd", "sshd"]}' \
+#     -e '{"required_endpoints": [{"host": "10.20.1.10", "port": 53}]}'
+- name: Post-build acceptance
+  hosts: newly_built
+  gather_facts: true
+  tasks:
+    - name: Acceptance | Running the expected kernel
+      ansible.builtin.assert:
+        that: ansible_facts['kernel'] is version(expected_kernel, '>=')
+        fail_msg: "Booted {{ ansible_facts['kernel'] }}, expected {{ expected_kernel }} - check grub, not the installer."
+
+    - name: Acceptance | Identity matches inventory
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['hostname'] == inventory_hostname
+          - ansible_facts['default_ipv4']['address'] == expected_ip
+
+    - name: Acceptance | Disks and RAID healthy, layout as designed
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['mounts'] | selectattr('mount','equalto','/var') | list | length == 1
+          - ansible_facts['mounts'] | selectattr('mount','equalto','/var/log') | list | length == 1
+        fail_msg: "Disk layout does not match the build standard - a twin that is not a twin."
+
+    - name: Acceptance | Bond is up with both members at the expected speed
+      # No `cat | grep` pipeline: without pipefail a missing bond0 file would make
+      # cat fail silently and grep decide the result. grep reading the file
+      # directly fails loudly (rc 2) when bond0 does not exist.
+      ansible.builtin.command: grep -E 'MII Status|Slave Interface|Speed' /proc/net/bonding/bond0
+      register: bond
+      changed_when: false
+      failed_when: "'MII Status: down' in bond.stdout"
+
+    - name: Acceptance | NTP is actually synchronised
+      ansible.builtin.command: chronyc tracking
+      register: chrony
+      changed_when: false
+      failed_when: "'Not synchronised' in chrony.stdout"
+
+    - name: Acceptance | Required agents are running
+      ansible.builtin.service_facts:
+
+    - name: Acceptance | Agents present
+      ansible.builtin.assert:
+        that: "(ansible_facts.services[item + '.service'].state | default('absent')) == 'running'"
+        fail_msg: "{{ item }} is not running - the host would be invisible in production."
+      loop: "{{ required_agents }}"
+
+    - name: Acceptance | Can reach what it must reach
+      ansible.builtin.wait_for:
+        host: "{{ item.host }}"
+        port: "{{ item.port }}"
+        timeout: 5
+      loop: "{{ required_endpoints }}"

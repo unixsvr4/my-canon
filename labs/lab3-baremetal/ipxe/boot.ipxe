@@ -1,0 +1,28 @@
+#!ipxe
+# Chainloaded from the NIC's built-in PXE ROM. iPXE over HTTP instead of plain
+# TFTP: TFTP has no windowing and dies on congested or high-latency links, and
+# a 700MB initrd over TFTP is how builds "mysteriously hang at 47%".
+
+set base-url http://10.20.1.20/provision
+
+# The MAC is the identity. The provisioning service answers with this host's
+# profile, or with "unknown" if the machine is not in the source of truth -
+# which is deliberate: an unregistered machine must NOT get an automatic build.
+chain ${base-url}/ipxe/host?mac=${mac:hexhyp} || goto unregistered
+
+:rhel9-min
+kernel ${base-url}/images/rhel9/vmlinuz ip=dhcp inst.repo=${base-url}/repos/rhel9 inst.ks=${base-url}/ks/${mac:hexhyp}.cfg inst.text console=ttyS0,115200n8
+initrd ${base-url}/images/rhel9/initrd.img
+boot || goto failed
+
+:unregistered
+echo
+echo *** ${mac} is not registered in inventory - refusing to build ***
+echo *** Register the host first, then reboot.                     ***
+echo
+prompt --key 0x18 --timeout 30000 Press Ctrl-X for the iPXE shell || shell
+exit
+
+:failed
+echo *** Build failed to start. Dropping to shell for diagnosis. ***
+shell

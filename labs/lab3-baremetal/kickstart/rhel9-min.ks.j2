@@ -1,0 +1,63 @@
+# Kickstart for {{ hostname }} ({{ rack }} U{{ unit }})  -- RENDERED, do not edit by hand.
+# Deliberately THIN: its only job is to produce a reachable, minimal machine and
+# hand it to configuration management. Everything that could differ between two
+# servers belongs in Ansible, where it is versioned and re-runnable - not in a
+# %post block that nobody ever runs again after build day.
+
+text
+eula --agreed
+keyboard us
+lang en_US.UTF-8
+timezone UTC --utc
+
+# Identity comes from inventory, not from a human at a console.
+# ONE LINE on purpose: kickstart has no backslash line continuation. A wrapped
+# `network` command is parsed as several unknown commands and the bond, address
+# and VLAN are never configured. (Caught by ksvalidator -v RHEL9; see RESEARCH.md.)
+network --bootproto=static --device=bond0 --bondslaves={{ bond_members }} --bondopts=mode=802.3ad,miimon=100 --vlanid={{ vlan }} --ip={{ ip }} --netmask={{ netmask }} --gateway={{ gateway }} --nameserver={{ nameserver }} --hostname={{ hostname }} --activate
+
+# Wipe and lay out explicitly. Never "use whatever is there" - a rebuild has to
+# produce a byte-identical layout or your twin servers are not twins.
+ignoredisk --only-use={{ disk }}
+zerombr
+clearpart --all --initlabel --drives={{ disk }}
+part /boot/efi --fstype=efi   --size=600  --ondisk={{ disk }}
+part /boot     --fstype=xfs   --size=1024 --ondisk={{ disk }}
+part pv.01     --size=1 --grow             --ondisk={{ disk }}
+volgroup vg0 pv.01
+logvol /        --vgname=vg0 --name=root --fstype=xfs --size=20480
+logvol /var     --vgname=vg0 --name=var  --fstype=xfs --size=20480
+logvol /var/log --vgname=vg0 --name=log  --fstype=xfs --size=10240
+logvol swap     --vgname=vg0 --name=swap --size=4096
+
+bootloader --location=mbr --boot-drive={{ disk }} --append="console=ttyS0,115200n8 intel_idle.max_cstate=0 processor.max_cstate=1"
+# ^ C-state limits: on a latency-sensitive box, a core waking out of a deep
+#   C-state costs microseconds you cannot get back. This belongs in the build
+#   standard, not in somebody's memory.
+
+rootpw --lock                       # no interactive root; access is via the automation account + sudo
+authselect select sssd --force
+firewall --enabled --service=ssh
+selinux --enforcing
+services --enabled=sshd,chronyd,rsyslog
+reboot
+
+# The minimal set is the @^minimal-environment group below; `%packages --minimal`
+# is not a valid option and fails validation.
+%packages
+@^minimal-environment
+chrony
+python3
+sudo
+%end
+
+%post --log=/root/ks-post.log
+# Just enough to be reachable and manageable. Nothing else.
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+curl -sf http://10.20.1.20/provision/keys/automation.pub >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+
+# Register the build so the pipeline knows this host reached post-install, and
+# so a build that silently never finishes is VISIBLE rather than forgotten.
+curl -sf -X POST "http://10.20.1.20/provision/callback?host={{ hostname }}&stage=post&profile={{ profile }}"
+%end
