@@ -1,0 +1,62 @@
+# =============================================================================
+# cloud-hosts.yml - the source of truth for machines that are DECLARED rather
+# than BUILT.
+#
+# hosts.yml describes servers that have to be manufactured: they have a MAC
+# address, a rack, a unit, a disk to partition and a bond to configure, and the
+# pipeline's job is to turn a powered-off box into an operating system.
+#
+# These have none of that. An EC2 instance is declared and it exists; there is
+# no DHCP reservation, no iPXE decision, no kickstart. What replaces them:
+#
+#   MAC address       -> nothing. The instance id is assigned on creation.
+#   DHCP reservation  -> the subnet's own DHCP, and a tag for identity
+#   kickstart         -> the AMI (already installed) plus cloud-init user data
+#   iPXE              -> the EC2 API call
+#
+# So the two files hold different fields, and that is the honest shape of a
+# hybrid fleet - one CMDB, two kinds of record. What they SHARE is everything
+# downstream: scripts/render.py turns both into artifacts, both end up in the
+# same Ansible groups, and lab 2's baseline and kernel roles configure them with
+# the same code. Configuration management sees one fleet.
+#
+# From this file, render.py generates:
+#   out/cloud-init/<hostname>.yaml            user data for first boot
+#   out/aws/instances.auto.tfvars.json        input to the Terraform root that
+#                                             creates them (lab 1)
+#   out/aws/inventory-preview.yml             the Ansible groups the TAGS will
+#                                             produce, so the contract between
+#                                             Terraform and lab 2's aws_ec2
+#                                             inventory can be reviewed before
+#                                             anything is created
+#
+# In production this is the same CMDB record set as hosts.yml, queried over its
+# API with a different record type - not a second system.
+# =============================================================================
+cloud_hosts:
+  - hostname: canon-api01
+    role: application
+    service: api
+    environment: prod
+    instance_type: m7g.large      # Graviton: cheaper per vCPU-hour than x86
+    availability_zone: us-east-1a
+    volume_size: 40
+    kernel_profile: throughput
+
+  - hostname: canon-api02
+    role: application
+    service: api
+    environment: prod
+    instance_type: m7g.large
+    availability_zone: us-east-1b # the SECOND AZ: one instance per AZ, so a
+    volume_size: 40               # zone event is a capacity loss, not an outage
+    kernel_profile: throughput
+
+  - hostname: canon-pg01
+    role: database
+    service: postgres
+    environment: prod
+    instance_type: r7g.xlarge     # memory-optimised, for a database on the host
+    availability_zone: us-east-1a
+    volume_size: 200
+    kernel_profile: database       # transparent_hugepage=never, 1GB hugepages

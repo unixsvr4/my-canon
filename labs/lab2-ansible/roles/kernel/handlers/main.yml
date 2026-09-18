@@ -1,0 +1,25 @@
+---
+# =============================================================================
+# Handlers run only when NOTIFIED, and once per play however many tasks
+# notified them. That is what keeps this idempotent: an unchanged sysctl file
+# never reloads anything.
+#
+# Names are prefixed with the role so a playbook combining several roles cannot
+# trigger the wrong one - the baseline role has its own "apply sysctl" handler,
+# and two handlers with the same name in one play is a silent collision.
+# =============================================================================
+
+# `sysctl --system`, not `sysctl -p <our file>`, and the difference matters.
+#
+# Loading only this role's file would apply its values even when a
+# later-sorting drop-in is supposed to override them - so the running kernel
+# would disagree with what a reboot produces. `--system` replays every file in
+# the real order (/run, /etc, /usr/local, /usr/lib) so the result after the
+# handler is identical to the result after a reboot. Verification then compares
+# against the state a reboot would give, which is the only state worth
+# asserting on.
+- name: Kernel | load sysctl values
+  ansible.builtin.command:
+    cmd: "{{ kernel_sysctl_apply_cmd }}"
+  changed_when: true
+  when: kernel_sysctl_apply | bool

@@ -1,0 +1,90 @@
+---
+# =============================================================================
+# group_vars/aws_ec2.yml - how the controller reaches EC2 instances, and why it
+# is not SSH.
+#
+# The aws_ec2 inventory plugin puts every instance it finds in a group named
+# after the plugin, so these variables apply to all of them and to nothing else.
+# The container hosts in hosts.yml keep their own connection settings.
+#
+# SESSION MANAGER INSTEAD OF SSH
+#
+# The instances in lab 1's module sit in private subnets with no public address
+# and no inbound rule on port 22. Reaching them with SSH would need one of:
+#
+#   a bastion host           another instance to patch, monitor and keep
+#                            hardened, holding a key that opens the fleet
+#   a VPN or Direct Connect  correct, and not available to a pipeline running
+#                            on a hosted runner
+#   a public IP + port 22    the thing every audit asks about
+#
+# The aws_ssm connection plugin removes the question. The SSM agent on the
+# instance polls OUT to the Systems Manager endpoint, so there is no inbound
+# rule at all, and the controller's authorisation is IAM - the same identity
+# that authorises everything else, with CloudTrail recording every session and
+# every command. There is no SSH key to distribute, rotate or lose.
+#
+# The instance needs: the SSM agent (in every current Amazon Linux, Ubuntu and
+# RHEL AMI), an instance profile with AmazonSSMManagedInstanceCore, and a route
+# to the SSM endpoints - a NAT gateway, or interface VPC endpoints for
+# ssm/ssmmessages/ec2messages, which is the same set lab 1's module documents
+# in its task security group.
+#
+# The controller needs: the amazon.aws and community.aws collections, the AWS
+# CLI's session-manager-plugin, boto3, and an S3 bucket the plugin uses to move
+# module payloads (it cannot stream them over the session channel).
+# =============================================================================
+
+ansible_connection: community.aws.aws_ssm
+
+# Where the plugin stages module payloads. It must be in the same region as the
+# instances, encrypted, and reachable from them - which for a private subnet
+# means a gateway endpoint for S3. The bucket is the one part of this setup
+# people forget, and the error ("Failed to transfer module") does not mention it.
+ansible_aws_ssm_bucket_name: canon-ansible-ssm-transfer
+ansible_aws_ssm_region: us-east-1
+
+# Server-side encryption for those payloads. They are Ansible modules with the
+# variables already substituted in, which means they can contain anything the
+# play passes to a module - so they are treated as sensitive.
+ansible_aws_ssm_s3_addressing_style: virtual
+ansible_aws_ssm_bucket_sse_mode: aws:kms
+ansible_aws_ssm_bucket_sse_kms_key_id: alias/canon-ansible-ssm
+
+# Instances are addressed by INSTANCE ID over SSM, not by hostname or IP: the
+# session is established with the SSM API, which knows instances by id. The
+# inventory's `compose` block already carries it through.
+ansible_aws_ssm_instance_id: "{{ ec2_instance_id }}"
+
+# The agent runs as root, so no become is needed - and using become anyway
+# would put an extra privilege escalation in the audit trail for no benefit.
+ansible_become: false
+
+# --- Secrets ------------------------------------------------------------------
+# On AWS there is no Ansible Vault password to distribute either. A lookup
+# resolves the value at runtime through the same IAM identity, so the secret is
+# never in the repository, never in a variable file, and never in a CI secret
+# store - and access to it is logged per play run:
+#
+#   app_db_password: "{{ lookup('amazon.aws.aws_secret', 'canon/prod/db', region='us-east-1') }}"
+#   app_api_key:     "{{ lookup('amazon.aws.aws_ssm_parameter', '/canon/prod/api-key', region='us-east-1') }}"
+#
+# Use `no_log: true` on any task that consumes one. A lookup keeps the secret
+# out of the repository; it does not keep it out of the log.
+
+# --- The kernel role on AWS ---------------------------------------------------
+# The default is right for a real instance: it owns its kernel, so the runtime
+# values are loaded and the strict key check is meaningful (unlike the
+# containers in kernel-hosts.yml).
+kernel_sysctl_apply: true
+kernel_sysctl_strict: true
+
+# Applying boot arguments to a RUNNING instance in an Auto Scaling group is
+# lost on the next instance refresh - the replacement boots from the AMI. So on
+# a live fleet the bootloader layer is left alone here and owned by the image
+# build instead, where `kernel_fail_on_reboot_required: true` makes an
+# unfinished image fail its pipeline. See roles/kernel/vars/distro-Amazon.yml.
+#
+# Set this to true for a long-lived, non-autoscaled instance, where the host
+# and its boot configuration really do persist.
+kernel_manage_bootloader: false

@@ -1,0 +1,88 @@
+---
+# =============================================================================
+# LAYER 3: boot arguments - the settings with no runtime equivalent.
+#
+# This is the layer that makes the role worth having. transparent_hugepage,
+# isolcpus, 1GB hugepages, C-state caps, IOMMU mode: the kernel reads them once,
+# at boot, and there is no /proc/sys for any of them.
+#
+# The interface is one variable, kernel_cmdline_effective. The MECHANISM is
+# per-distribution and comes from vars/family-*.yml:
+#
+#   grub-dropin  Debian/Ubuntu: a 99- file in /etc/default/grub.d, sourced by
+#                grub-mkconfig after /etc/default/grub, so it wins over the
+#                cloud image's own drop-in.
+#   grub-file    RHEL/Amazon/SUSE: edit GRUB_CMDLINE_LINUX(_DEFAULT) in
+#                /etc/default/grub, because these families have no drop-in
+#                directory - plus grubby on the RHEL family to update the
+#                existing BLS entries.
+#
+# This is the same shape as docs/platform-translation.md prescribes for a
+# second cloud: keep the interface identical, write a per-platform
+# implementation behind it, and do not build one abstraction that tries to be
+# both.
+# =============================================================================
+
+- name: Bootloader | Check for the bootloader configuration
+  ansible.builtin.stat:
+    path: "{{ kernel_grub_file }}"
+  register: kernel_grub_stat
+
+# A container has no bootloader, and neither does an image being built for a
+# platform that injects its own command line. Managing the file is still
+# correct - it is what a future boot would read - but the generator cannot run,
+# so the role records that instead of failing.
+- name: Bootloader | Detect whether a bootloader generator is available
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      have=""
+      command -v grubby >/dev/null 2>&1 && have="$have grubby"
+      command -v update-grub >/dev/null 2>&1 && have="$have update-grub"
+      command -v grub2-mkconfig >/dev/null 2>&1 && have="$have grub2-mkconfig"
+      command -v grub-mkconfig >/dev/null 2>&1 && have="$have grub-mkconfig"
+      printf '%s' "${have# }"
+    executable: /bin/bash
+  register: kernel_boot_tools
+  changed_when: false
+  check_mode: false
+
+- name: Bootloader | Write the boot arguments (Debian family drop-in)
+  ansible.builtin.import_tasks: bootloader-dropin.yml
+  when: kernel_bootloader_style == 'grub-dropin'
+
+- name: Bootloader | Write the boot arguments (RHEL, Amazon and SUSE)
+  ansible.builtin.import_tasks: bootloader-file.yml
+  when: kernel_bootloader_style == 'grub-file'
+
+# --- Regenerate ---------------------------------------------------------------
+#
+# On the RHEL family kernel_regenerate_cmd is deliberately empty: grubby has
+# already rewritten the live BLS entries, and running grub2-mkconfig there
+# means choosing between /boot/grub2/grub.cfg and
+# /boot/efi/EFI/<distro>/grub.cfg depending on the firmware - a choice that has
+# cost people a bootable system. On Debian and SUSE the generator MUST run,
+# because writing the file alone changes nothing.
+- name: Bootloader | Regenerate the bootloader configuration
+  ansible.builtin.command:
+    cmd: "{{ kernel_regenerate_cmd }}"
+  register: kernel_regenerate
+  changed_when: kernel_regenerate.rc == 0
+  when:
+    - kernel_regenerate_bootloader | bool
+    - kernel_regenerate_cmd | length > 0
+    - kernel_cmdline_changed | default(false) | bool
+    - kernel_regenerate_cmd.split() | first in kernel_boot_tools.stdout.split()
+
+- name: Bootloader | Report that the change is staged but not generated
+  ansible.builtin.debug:
+    msg: >-
+      {{ kernel_grub_file if kernel_bootloader_style == 'grub-file' else kernel_grub_dropin }}
+      is up to date, but no bootloader generator is installed on this host
+      ({{ kernel_regenerate_cmd | default('none required') }} not found).
+      The arguments are staged for whatever builds this host's boot
+      configuration next - which is correct in a container and in an image
+      build, and a problem on a server.
+  when:
+    - kernel_regenerate_cmd | length > 0
+    - kernel_regenerate_cmd.split() | first not in kernel_boot_tools.stdout.split()

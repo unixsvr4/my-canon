@@ -1,0 +1,122 @@
+---
+# =============================================================================
+# kernel - entry point.
+#
+# Order is deliberate and two steps of it are load-bearing:
+#
+#   platform  - pick the per-distribution mechanism (vars/family-*.yml)
+#   validate  - reject impossible input before touching the host
+#   modules   - BEFORE sysctl: net.netfilter.* and net.bridge.* do not exist
+#               as keys until nf_conntrack and br_netfilter are loaded, so a
+#               sysctl file written first is a file of unknown keys
+#   sysctl    - layer 1: runtime parameters
+#   limits    - layer 2b: per-process limits
+#   bootloader- layer 3: boot arguments, per-distribution mechanism
+#   flush     - run pending handlers now, so verify sees the reloaded state
+#   verify    - compare DESIRED with RUNNING, and report what needs a reboot
+#
+# import_tasks (static) rather than include_tasks: imported tasks inherit tags,
+# so `--tags kernel_bootloader` runs exactly the boot-argument section.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Pick the platform implementation.
+#
+# first_found tries the DISTRIBUTION file before the FAMILY file, so Amazon
+# Linux gets family-RedHat.yml's mechanics plus distro-Amazon.yml's overrides,
+# and an unsupported platform fails here with a message naming it - rather than
+# three tasks later with "file not found".
+# ---------------------------------------------------------------------------
+# tags: always.
+#
+# Without it, `--tags kernel_bootloader` skips these four tasks and the run
+# fails with "'kernel_grub_file' is undefined" - the mechanism, the profiles
+# and the merged set are prerequisites of every other tag, not a section of
+# their own. Found by running exactly that command.
+- name: Platform | Load the per-distribution mechanism
+  ansible.builtin.include_vars: "{{ item }}"
+  loop: "{{ query('ansible.builtin.first_found', params) }}"
+  vars:
+    params:
+      files:
+        - "family-{{ ansible_facts['os_family'] }}.yml"
+      paths:
+        - vars
+  tags: [always]
+
+- name: Platform | Apply distribution-specific overrides where they exist
+  ansible.builtin.include_vars: "{{ item }}"
+  loop: "{{ query('ansible.builtin.first_found', params) }}"
+  vars:
+    params:
+      files:
+        - "distro-{{ ansible_facts['distribution'] }}.yml"
+      skip: true
+      paths:
+        - vars
+  tags: [always]
+
+- name: Platform | Load the workload profiles
+  ansible.builtin.include_vars: profiles.yml
+  tags: [always]
+
+# ---------------------------------------------------------------------------
+# Resolve the profile and the caller's additions into one effective set.
+#
+# THE MERGE PATTERN: Ansible replaces dicts and lists at higher precedence
+# instead of merging them, so a group_vars file that set `kernel_sysctl`
+# directly would silently drop every profile value. The role owns the profile;
+# the caller owns the `_extra` variables; the tasks combine them here, once.
+# ---------------------------------------------------------------------------
+- name: Platform | Resolve the effective tuning set
+  ansible.builtin.set_fact:
+    kernel_sysctl_effective: >-
+      {{ kernel_profiles[kernel_profile].sysctl | combine(kernel_sysctl_extra) }}
+    kernel_cmdline_effective: >-
+      {{ (kernel_profiles[kernel_profile].cmdline + kernel_cmdline_extra) | unique }}
+    kernel_modules_effective: >-
+      {{ (kernel_profiles[kernel_profile].modules + kernel_modules_extra) | unique }}
+    kernel_module_options_effective: >-
+      {{ kernel_profiles[kernel_profile].module_options | combine(kernel_module_options_extra) }}
+    kernel_limits_effective: >-
+      {{ kernel_profiles[kernel_profile].limits + kernel_limits_extra }}
+  tags: [always]
+
+- name: Validate the request against this host
+  ansible.builtin.import_tasks: validate.yml
+  tags: [kernel, kernel_validate]
+
+- name: Configure kernel modules and their load-time options
+  ansible.builtin.import_tasks: modules.yml
+  tags: [kernel, kernel_modules]
+
+- name: Configure runtime kernel parameters
+  ansible.builtin.import_tasks: sysctl.yml
+  tags: [kernel, kernel_sysctl]
+
+- name: Configure resource limits
+  ansible.builtin.import_tasks: limits.yml
+  tags: [kernel, kernel_limits]
+
+- name: Configure boot-time kernel arguments
+  ansible.builtin.import_tasks: bootloader.yml
+  when: kernel_manage_bootloader | bool
+  tags: [kernel, kernel_bootloader]
+
+# Handlers normally run at the END of the play. Flushing here means the verify
+# step below sees the state AFTER any sysctl reload it triggered, instead of
+# reporting the pre-reload values as drift.
+- name: Flush handlers before verification
+  ansible.builtin.meta: flush_handlers
+  tags: [kernel, kernel_verify]
+
+# Skipped in check mode: nothing was converged, so on a drifted host the
+# running kernel is still the drifted one and the report would be noise. The
+# drift is already visible in the diffs above - see the baseline role's
+# verify.yml for the same reasoning and drift-check.sh for why it matters.
+- name: Verify the running kernel against the desired state
+  ansible.builtin.import_tasks: verify.yml
+  when:
+    - kernel_verify | bool
+    - not ansible_check_mode
+  tags: [kernel, kernel_verify]

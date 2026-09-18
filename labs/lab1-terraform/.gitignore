@@ -14,8 +14,16 @@ drift.plan.json
 # Example scratch directories
 .work/
 
-# Lock files are committed for ROOTS (envs/dev, envs/prod) to pin provider
-# builds per environment. A reusable module must not pin its callers, and the
-# examples use no providers.
+# Lock files are committed for ROOTS (envs/dev, envs/prod, aws/envs/*) to pin
+# provider builds per environment. A reusable module must not pin its callers,
+# and the examples use no providers.
 modules/**/.terraform.lock.hcl
 examples/**/.terraform.lock.hcl
+
+# The one deliberate exception: aws/modules/app_stack is itself a TEST TARGET -
+# `terraform test` runs in that directory, and its 22 runs are a verified
+# result, so the aws provider build they ran against is pinned and committed.
+# (These patterns are relative to this file, so the two above do not reach into
+# aws/ anyway; this comment exists so that is a decision rather than an
+# accident of pattern matching.)
+!aws/modules/app_stack/.terraform.lock.hcl

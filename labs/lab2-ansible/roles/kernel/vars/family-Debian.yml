@@ -1,0 +1,51 @@
+---
+# =============================================================================
+# Debian family: Ubuntu 24.04, Debian 12.
+#
+# THE MECHANISM, and the one real drop-in system of the four.
+#
+# /usr/sbin/grub-mkconfig sources its configuration in this order (verified by
+# reading the script on ubuntu:24.04, lines 160-169):
+#
+#     if test -f ${sysconfdir}/default/grub ; then
+#       . ${sysconfdir}/default/grub
+#     fi
+#     for x in ${sysconfdir}/default/grub.d/*.cfg ; do
+#       if [ -e "${x}" ]; then . "${x}" ; fi
+#     done
+#
+# So /etc/default/grub is read first, then every /etc/default/grub.d/*.cfg in
+# GLOB ORDER, and because they are shell scripts being sourced, THE LAST
+# ASSIGNMENT WINS.
+#
+# This matters on every Ubuntu cloud image, including every Ubuntu AMI: they
+# ship /etc/default/grub.d/50-cloudimg-settings.cfg, which sets
+# GRUB_CMDLINE_LINUX_DEFAULT. Edit /etc/default/grub and the cloud image's
+# drop-in overwrites your value afterwards; add a 40- file and the same thing
+# happens. The role's file is 99-, so it is read last.
+#
+# This is the same failure as the sshd drop-in in the baseline role (a 99-named
+# hardening file losing to a vendor 25- file) with the ordering reversed: sshd
+# takes the FIRST value it reads, a sourced shell file keeps the LAST. Knowing
+# which way round a given config system works is the whole job.
+#
+# GRUB_CMDLINE_LINUX_DEFAULT, not GRUB_CMDLINE_LINUX: the _DEFAULT form is
+# applied to the normal boot entry and NOT to the recovery entry, which is what
+# you want - a recovery boot should not inherit isolcpus or a C-state cap.
+# =============================================================================
+
+kernel_bootloader_style: grub-dropin
+kernel_grub_file: /etc/default/grub
+kernel_grub_cmdline_key: GRUB_CMDLINE_LINUX_DEFAULT
+
+# No grubby on Debian or Ubuntu; the generator has to run.
+kernel_use_grubby: false
+kernel_regenerate_cmd: update-grub
+
+kernel_sysctl_apply_cmd: sysctl --system
+kernel_sysctl_binary: /sbin/sysctl
+
+kernel_platform_note: >-
+  Ubuntu/Debian: a 99- drop-in in /etc/default/grub.d, which grub-mkconfig
+  sources after /etc/default/grub, so it wins over the cloud image's
+  50-cloudimg-settings.cfg. update-grub regenerates /boot/grub/grub.cfg.

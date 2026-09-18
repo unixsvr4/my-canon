@@ -1,0 +1,38 @@
+---
+# =============================================================================
+# SUSE family: SLES 15, openSUSE Leap 15.
+#
+# THE MECHANISM
+# /etc/default/grub with GRUB_CMDLINE_LINUX_DEFAULT, then grub2-mkconfig. No
+# BLS entries and no grubby, so the generator MUST run - unlike the RHEL family,
+# writing the file alone changes nothing at all.
+#
+# Two SUSE-specific things worth knowing:
+#
+#   1. YaST writes the same file. `yast bootloader` and this role are two
+#      writers of one file, and YaST reformats what it rewrites. On a
+#      YaST-managed fleet, decide which one owns it - the answer is usually
+#      the automation, and YaST's bootloader module stops being used.
+#
+#   2. On SLE Micro and other transactional-update systems, / is read-only and
+#      changes are applied to a new btrfs snapshot:
+#          transactional-update grub.cfg
+#      followed by a reboot into the new snapshot. Editing the running system
+#      appears to work and is discarded. The role refuses to regenerate when
+#      /etc is read-only rather than pretending it succeeded.
+# =============================================================================
+
+kernel_bootloader_style: grub-file
+kernel_grub_file: /etc/default/grub
+kernel_grub_cmdline_key: GRUB_CMDLINE_LINUX_DEFAULT
+
+kernel_use_grubby: false
+kernel_regenerate_cmd: grub2-mkconfig -o /boot/grub2/grub.cfg
+
+kernel_sysctl_apply_cmd: sysctl --system
+kernel_sysctl_binary: /sbin/sysctl
+
+kernel_platform_note: >-
+  SLES/openSUSE: GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub plus
+  grub2-mkconfig - there is no grubby, so the generator must run. YaST writes
+  the same file; on transactional systems use transactional-update grub.cfg.

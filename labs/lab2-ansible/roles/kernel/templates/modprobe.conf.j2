@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+# Parameters applied AS EACH MODULE LOADS. There is no runtime equivalent: a
+# module already loaded with different options keeps them until it is reloaded
+# or the host reboots.
+{% for module, options in (kernel_module_options_effective | dictsort) %}
+options {{ module }} {{ options }}
+{% endfor %}
+{% if not kernel_module_options_effective %}
+# (this profile sets no load-time module options)
+{% endif %}

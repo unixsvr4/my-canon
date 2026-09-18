@@ -1,0 +1,345 @@
+---
+# =============================================================================
+# The workload profiles.
+#
+# Each profile says WHAT to tune; vars/family-*.yml says HOW to persist it on a
+# given distribution. Every value has a comment saying what it does and what
+# goes wrong without it, because a tuning file nobody can explain is a tuning
+# file nobody dares change.
+#
+# Layers, and why a setting is in one rather than another:
+#   sysctl          readable and writable at runtime via /proc/sys
+#   cmdline         the kernel only reads it at boot - no runtime equivalent
+#   modules         must be loaded before its sysctls exist
+#   module_options  only settable AS THE MODULE LOADS, never afterwards
+#   limits          per-process ulimits, applied by PAM at login/service start
+# =============================================================================
+
+kernel_profiles:
+
+  # ---------------------------------------------------------------------------
+  # general - a safe baseline for any server. Nothing here is workload-specific
+  # and nothing here needs a reboot.
+  # ---------------------------------------------------------------------------
+  general:
+    sysctl:
+      # Survive a SYN flood without dropping legitimate connections.
+      net.ipv4.tcp_syncookies: 1
+      # Do not accept ICMP redirects: a redirect rewrites this host's routing
+      # table from the network. Attack surface with no modern use case.
+      net.ipv4.conf.all.accept_redirects: 0
+      net.ipv4.conf.all.send_redirects: 0
+      # Reverse-path filter: drop packets whose source address could not have
+      # come from the interface they arrived on.
+      net.ipv4.conf.all.rp_filter: 1
+      # Hide kernel pointers and dmesg from unprivileged users - both are used
+      # to defeat KASLR when building a local exploit.
+      kernel.kptr_restrict: 1
+      kernel.dmesg_restrict: 1
+      # Refuse hardlinks/symlinks to files the user does not own in
+      # world-writable sticky directories: the /tmp symlink race, closed.
+      fs.protected_hardlinks: 1
+      fs.protected_symlinks: 1
+      # Swap only under real pressure. 60 (the default) lets the kernel swap out
+      # an idle service and turns its next request into a disk read.
+      vm.swappiness: 10
+      fs.file-max: 2097152
+      # Reboot 10 seconds after a panic instead of sitting at a dead console
+      # until someone notices. For a fleet, a rebooted node beats a hung one.
+      kernel.panic: 10
+      kernel.panic_on_oops: 1
+    cmdline: []
+    modules: []
+    module_options: {}
+    limits:
+      - domain: "*"
+        item: nofile
+        value: 65536
+
+  # ---------------------------------------------------------------------------
+  # throughput - high-bandwidth network services: reverse proxies, ingest,
+  # object storage, anything moving serious traffic over long-fat pipes.
+  # ---------------------------------------------------------------------------
+  throughput:
+    sysctl:
+      # BBR + fq. BBR models bandwidth and round-trip time instead of treating
+      # every loss as congestion, which is what makes CUBIC collapse on paths
+      # with any loss at all. It NEEDS fq (or fq_codel) as the queueing
+      # discipline to pace packets; with the default pfifo_fast it underperforms
+      # and the reason is invisible.
+      net.core.default_qdisc: fq
+      net.ipv4.tcp_congestion_control: bbr
+      # Socket buffer ceilings, and the auto-tuning range TCP is allowed to grow
+      # into. The middle value of tcp_rmem is the DEFAULT, not the maximum: set
+      # the max too low and a 10Gb link over 80ms of latency cannot fill the
+      # pipe no matter how fast both ends are (bandwidth-delay product).
+      net.core.rmem_max: 134217728
+      net.core.wmem_max: 134217728
+      net.ipv4.tcp_rmem: "4096 131072 134217728"
+      net.ipv4.tcp_wmem: "4096 65536 134217728"
+      # The backlog between the NIC's interrupt handler and the TCP stack.
+      # When it overflows the drops are counted in /proc/net/softnet_stat and
+      # nowhere a normal dashboard looks.
+      net.core.netdev_max_backlog: 250000
+      # The accept queue. The default of 4096 (128 on older kernels) is where
+      # "connection refused under load" comes from, and it caps whatever the
+      # application passed to listen().
+      net.core.somaxconn: 65535
+      net.ipv4.tcp_max_syn_backlog: 65535
+      # Stop the sender buffering more than 16KB beyond what has been sent:
+      # cuts bufferbloat latency inside the host without costing throughput.
+      net.ipv4.tcp_notsent_lowat: 16384
+      # Do not throw away the learned congestion window after an idle moment.
+      # On keep-alive connections that serve bursty traffic, the default makes
+      # every burst restart in slow start.
+      net.ipv4.tcp_slow_start_after_idle: 0
+      # Find the real MTU when ICMP is filtered - the classic "big responses
+      # hang, small ones work" black-hole.
+      net.ipv4.tcp_mtu_probing: 1
+      # Ephemeral ports. A busy proxy opens one per upstream connection, and
+      # the default range runs out at about 28,000.
+      net.ipv4.ip_local_port_range: "10240 65535"
+      # Reuse TIME_WAIT sockets for new OUTGOING connections. Safe, unlike the
+      # tcp_tw_recycle it is constantly confused with - that one broke NAT and
+      # was removed from the kernel in 4.12.
+      net.ipv4.tcp_tw_reuse: 1
+      net.ipv4.tcp_fin_timeout: 15
+      # Connection tracking table. Overflowing it drops packets and logs
+      # "nf_conntrack: table full" - see module_options below for the other
+      # half of this setting.
+      net.netfilter.nf_conntrack_max: 1048576
+    cmdline: []
+    modules:
+      # nf_conntrack must be loaded before net.netfilter.* exists at all. This
+      # ordering is why tasks/modules.yml runs before tasks/sysctl.yml.
+      - nf_conntrack
+      # Built into most modern kernels; listed so the profile is explicit about
+      # its dependency, and harmless when it is built in.
+      - tcp_bbr
+    module_options:
+      # THE EXAMPLE FOR WHY LAYER 2 EXISTS.
+      #
+      # nf_conntrack_max (above) is the table's size limit. hashsize is the
+      # number of buckets, and it can ONLY be set as the module loads - there
+      # is a /sys knob but resizing a live table is not something to do on a
+      # busy host. Leave it at the default and a million tracked connections
+      # hash into 65,536 buckets: every lookup walks a long chain, and softirq
+      # CPU climbs with no obvious cause. The rule of thumb is max/4.
+      nf_conntrack: hashsize=262144
+    limits:
+      - domain: "*"
+        item: nofile
+        value: 1048576
+
+  # ---------------------------------------------------------------------------
+  # database - PostgreSQL, MySQL or MongoDB running ON the host.
+  #
+  # This is the profile where the reboot matters: two of its three most
+  # important settings cannot be applied to a running kernel.
+  # ---------------------------------------------------------------------------
+  database:
+    sysctl:
+      # 1, not 0. Zero forbids swapping entirely, so a memory spike goes
+      # straight to the OOM killer, which picks the biggest process - the
+      # database. One keeps swap as a last resort without using it routinely.
+      vm.swappiness: 1
+      # Writeback thresholds in BYTES, not the _ratio percentages. On a host
+      # with 256GB of RAM, the default dirty_ratio of 20% lets 51GB of dirty
+      # pages accumulate and then flushes them in one storm that stalls every
+      # query. Setting the _bytes form zeroes the _ratio form - they are two
+      # views of one setting, and mixing them is a common mistake.
+      vm.dirty_background_bytes: 67108864
+      vm.dirty_bytes: 536910848
+      # Refuse to promise memory that does not exist. With the default (0) the
+      # kernel overcommits, and the OOM killer eventually chooses the
+      # postmaster; with 2 an allocation fails instead, which the database
+      # handles as an error it can report.
+      #
+      # SIZE THIS DELIBERATELY: the limit is swap + overcommit_ratio% of RAM.
+      # Too low and the database cannot start. This is the one value in this
+      # file that must be reviewed per host class rather than copied.
+      vm.overcommit_memory: 2
+      vm.overcommit_ratio: 80
+      # Memory-mapped regions per process. MongoDB's WiredTiger and
+      # Elasticsearch both exhaust the 65,530 default and fail to start with a
+      # message about "max virtual memory areas".
+      vm.max_map_count: 262144
+      # Never reclaim from the local NUMA node in preference to using a remote
+      # one. Set to 1, a database that has filled its local node stalls on
+      # reclaim while memory sits free two inches away.
+      vm.zone_reclaim_mode: 0
+      # Automatic NUMA page migration moves the database's pages around under
+      # it. Pin the workload instead (numactl) and turn this off.
+      kernel.numa_balancing: 0
+      # Asynchronous I/O requests. InnoDB and Postgres with io_uring/AIO hit
+      # the 65,536 default and report "too many open files" for something that
+      # is not a file descriptor at all.
+      fs.aio-max-nr: 1048576
+    cmdline:
+      # TRANSPARENT HUGE PAGES: THE REASON THIS ROLE MANAGES THE BOOTLOADER.
+      #
+      # THP makes the kernel assemble 2MB pages in the background. For a
+      # database with a large shared buffer pool and lots of small random
+      # writes, compaction stalls show up as multi-second latency spikes with
+      # no query to blame. MongoDB, Redis and Oracle all document turning it
+      # off, and Postgres installations usually should.
+      #
+      # There is NO sysctl for it. The runtime interface is
+      # /sys/kernel/mm/transparent_hugepage/enabled, which resets on every
+      # boot, so the durable answer is a kernel command-line argument. Teams
+      # that "fixed" THP with an rc.local echo find it back after the next
+      # kernel update.
+      - transparent_hugepage=never
+      # Explicit 1GB huge pages for the shared buffer pool. 2MB pages can be
+      # reserved at runtime through vm.nr_hugepages; 1GB pages CANNOT - the
+      # allocator needs contiguous memory that only exists before userspace
+      # has fragmented it. Reserve at boot or not at all.
+      - default_hugepagesz=1G
+      - hugepagesz=1G
+      - hugepages=8
+    modules: []
+    module_options: {}
+    limits:
+      - domain: "*"
+        item: nofile
+        value: 65536
+      # Locking huge pages requires the memlock limit to allow it. Without
+      # this, the pages are reserved and the database cannot use them - the
+      # tuning is done and has no effect, which is the worst of both.
+      - domain: "*"
+        item: memlock
+        value: unlimited
+
+  # ---------------------------------------------------------------------------
+  # low-latency - latency-sensitive processing on pinned cores. Market data,
+  # real-time media, packet processing.
+  #
+  # Every setting here trades throughput, power and heat for predictability.
+  # Do not apply it to a general-purpose fleet: idle=poll alone will roughly
+  # double the idle power draw of the isolated cores.
+  # ---------------------------------------------------------------------------
+  low-latency:
+    sysctl:
+      kernel.numa_balancing: 0
+      # Do not migrate timers away from idle CPUs onto busy ones: a migrated
+      # timer is an interrupt arriving on a core that was supposed to be quiet.
+      kernel.timer_migration: 0
+      # Busy-poll the NIC instead of waiting for an interrupt. Microseconds off
+      # the receive path, at the cost of a spinning core.
+      net.core.busy_poll: 50
+      net.core.busy_read: 50
+      # /proc/stat and friends are recalculated every second by default, on
+      # every CPU. At 120 seconds the isolated cores are left alone.
+      vm.stat_interval: 120
+      # The NMI watchdog interrupts every core once a second to check for
+      # lockups. On an isolated core that is the largest remaining source of
+      # jitter. Turning it off means a hard lockup will not be detected -
+      # a deliberate trade, not an oversight.
+      kernel.nmi_watchdog: 0
+    cmdline:
+      - transparent_hugepage=never
+      # C-states are CPU sleep states. Exiting C6 costs tens of microseconds,
+      # which is a lifetime here, and it happens exactly when a quiet core is
+      # handed work. Capping at C1 (and idle=poll, which never sleeps at all)
+      # removes that exit latency.
+      - intel_idle.max_cstate=1
+      - processor.max_cstate=1
+      - idle=poll
+      # The isolation set. All three must name the SAME cores, or the
+      # configuration is worse than doing nothing:
+      #   isolcpus    keep the scheduler off these cores
+      #   nohz_full   stop the 1000Hz timer tick on them
+      #   rcu_nocbs   move RCU callback processing off them
+      # Leave at least core 0 (and ideally one core per socket) out of the set
+      # for the kernel's own housekeeping.
+      - isolcpus=managed_irq,domain,2-7
+      - nohz_full=2-7
+      - rcu_nocbs=2-7
+      # Spread the remaining timer ticks so the housekeeping cores do not all
+      # fire in the same microsecond.
+      - skew_tick=1
+      # Trust the TSC as a clock source rather than re-validating it, which
+      # otherwise costs a periodic check.
+      - tsc=reliable
+    modules: []
+    module_options: {}
+    limits:
+      - domain: "*"
+        item: memlock
+        value: unlimited
+      # Real-time scheduling priority, for a process that calls
+      # sched_setscheduler(SCHED_FIFO). Without it the call fails with EPERM
+      # and the application quietly runs at normal priority.
+      - domain: "*"
+        item: rtprio
+        value: 99
+
+  # ---------------------------------------------------------------------------
+  # container-host - a Kubernetes node.
+  #
+  # Most of these are the specific defaults that break at scale, each with a
+  # failure signature worth recognising.
+  # ---------------------------------------------------------------------------
+  container-host:
+    sysctl:
+      # inotify. Every kubelet, every log shipper and every config-reloading
+      # sidecar takes watches, and the default 128 instances / 8192 watches per
+      # user is reached at a few dozen pods. The failure is "too many open
+      # files" from a process that has almost no files open.
+      fs.inotify.max_user_instances: 8192
+      fs.inotify.max_user_watches: 1048576
+      fs.file-max: 2097152
+      # Every container is processes. The default pid_max of 32768 is a
+      # cluster-wide limit reached by a single node running enough pods, and
+      # the symptom is fork failures in unrelated workloads.
+      kernel.pid_max: 4194304
+      # Pod networking is routing.
+      net.ipv4.ip_forward: 1
+      net.ipv4.conf.all.forwarding: 1
+      # kube-proxy's iptables rules must see bridged traffic. Without these,
+      # Services work from outside the node and not from pods on it - and this
+      # key does not exist until br_netfilter is loaded (see modules).
+      net.bridge.bridge-nf-call-iptables: 1
+      net.bridge.bridge-nf-call-ip6tables: 1
+      # The ARP cache. Above ~1000 pods per node, or a large flat pod network,
+      # the default gc_thresh3 of 1024 starts evicting live neighbours and the
+      # node logs "neighbour: arp_cache: neighbor table overflow". Traffic to
+      # random pods fails intermittently, which is the worst kind.
+      net.ipv4.neigh.default.gc_thresh1: 4096
+      net.ipv4.neigh.default.gc_thresh2: 8192
+      net.ipv4.neigh.default.gc_thresh3: 16384
+      net.netfilter.nf_conntrack_max: 1048576
+      # Elasticsearch, and anything else memory-mapping heavily, in a pod.
+      vm.max_map_count: 262144
+      # The kubelet expects to do the evicting. A kernel-wide OOM panic takes
+      # the node (and every other pod on it) instead of one container.
+      vm.panic_on_oom: 0
+      kernel.panic: 10
+      kernel.panic_on_oops: 1
+    cmdline:
+      # cgroup v2, explicitly. Every current Kubernetes release wants it, and
+      # it is what makes the memory.* pressure interface and MemoryQoS work -
+      # but a host upgraded from an older distribution can still be booting
+      # with the v1 hierarchy, and then the kubelet silently falls back to v1
+      # accounting. Forcing it at boot removes "which hierarchy is this node
+      # on?" as a question, and there is no runtime way to switch.
+      - systemd.unified_cgroup_hierarchy=1
+      - cgroup_no_v1=all
+      # Pressure Stall Information: /proc/pressure/{cpu,memory,io}, which is
+      # how you tell "the node is busy" from "the node is stalled waiting for
+      # memory". Off by default on several distributions, and the kubelet's
+      # own eviction signals are far more useful with it on.
+      - psi=1
+    modules:
+      # Loaded here, not left to the CNI: a module that a container runtime
+      # autoloads on first use is a module that is missing on a fresh boot
+      # until something triggers it.
+      - br_netfilter
+      - overlay
+      - nf_conntrack
+    module_options:
+      nf_conntrack: hashsize=262144
+    limits:
+      - domain: "*"
+        item: nofile
+        value: 1048576

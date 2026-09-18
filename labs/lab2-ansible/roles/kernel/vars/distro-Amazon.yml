@@ -1,0 +1,52 @@
+---
+# =============================================================================
+# Amazon Linux 2023.
+#
+# AL2023 reports os_family "RedHat" and uses the same BLS + grubby mechanism, so
+# the mechanics are inherited from family-RedHat.yml. What is different is not
+# the file layout - it is the LIFECYCLE, and it is the part that catches people
+# who have only ever tuned long-lived servers.
+#
+# ON AWS, A RUNNING INSTANCE IS NOT WHERE TUNING BELONGS.
+#
+# Apply this role to a running EC2 instance in an Auto Scaling group and the
+# tuning is correct until the next scale-out, instance refresh, spot
+# interruption or AZ rebalance - at which point a fresh instance boots from the
+# AMI with none of it. The fleet then has two populations that behave
+# differently under load, and the difference is invisible in any dashboard that
+# aggregates them. It is the same class of problem as a `%post` block in Lab
+# 3's kickstart: a one-time change that becomes permanent invisible drift.
+#
+# Where it belongs instead, in order of preference:
+#
+#   1. BAKE IT INTO THE AMI. EC2 Image Builder runs this exact role in the
+#      build pipeline, reboots once during the build (so the boot arguments are
+#      already active in the image), and the AMI is then immutable and
+#      versioned. Set kernel_fail_on_reboot_required: true in that pipeline,
+#      so an image that still needs a reboot is a failed build, not a
+#      surprise later.
+#
+#   2. USER DATA, for the settings that do not need a reboot. cloud-init runs
+#      it on every first boot, so layer 1 and layer 2 are live before the
+#      instance is registered with a target group. Boot arguments set this way
+#      need a second reboot, which is why they belong in the AMI.
+#
+#   3. SSM State Manager on an association, for a long-lived fleet, as
+#      enforcement and drift detection rather than as the primary mechanism.
+#
+# Either way it is one role and one set of profiles - the same code Lab 3's
+# bare-metal servers get. That is the point of the layer boundary in
+# docs/architecture.md: Terraform stops when the machine boots, and what is
+# inside the machine is configuration management's job whether the machine is
+# an EC2 instance, a VM or a server in a rack.
+# =============================================================================
+
+kernel_platform_note: >-
+  Amazon Linux 2023: same BLS/grubby mechanism as RHEL 9. Applying it to a
+  running instance in an Auto Scaling group is lost on the next instance
+  refresh - bake it into the AMI with Image Builder (reboot during the build),
+  use user data for the no-reboot layers, and keep SSM State Manager for
+  enforcement.
+
+# Verified present on amazonlinux:2023.
+kernel_sysctl_binary: /usr/sbin/sysctl

@@ -1,0 +1,40 @@
+---
+# Galaxy metadata: what a consumer needs to know before depending on this role.
+galaxy_info:
+  role_name: kernel
+  namespace: canon
+  author: Abdoul Aw
+  description: >-
+    Reboot-persistent kernel tuning - sysctls, module load options, limits and
+    boot arguments - for RHEL, Ubuntu, SUSE and Amazon Linux, with verification
+    of the running kernel against the desired state.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+    # Galaxy's platform list predates Amazon Linux 2023 - it only accepts
+    # 6.1, 7.1, 7.2 or "all" for this platform, so "all" it is. The role is
+    # tested on AL2023; see vars/distro-Amazon.yml.
+    - name: Amazon
+      versions:
+        - all
+    - name: Ubuntu
+      versions:
+        - noble
+    - name: SLES
+      versions:
+        - "15"
+  galaxy_tags:
+    - kernel
+    - sysctl
+    - tuning
+    - grub
+    - performance
+
+# No role dependencies, deliberately. This role does not install packages: the
+# baseline role owns packages, and a tuning role that silently pulls in a
+# package manager is a tuning role nobody can reason about. Compose them in the
+# playbook (see kernel.yml), not here.
+dependencies: []

@@ -1,0 +1,193 @@
+---
+# =============================================================================
+# The role's input contract, enforced by ansible-core before the first task.
+#
+# argument_specs catches the cheap mistakes for free - wrong type, unknown
+# profile name, a string where a list belongs - and it does it BEFORE anything
+# touches a host, which is the only time an input error is harmless.
+#
+# What it cannot check is anything that depends on the target: whether this
+# kernel has these keys, whether a boot argument is usable. That is
+# tasks/validate.yml. Both layers are needed: see the baseline role's
+# README for the same split, and RESEARCH.md A2 for a case where
+# argument_specs let a value through that looked fine and was not.
+# =============================================================================
+argument_specs:
+  main:
+    short_description: Kernel tuning that survives a reboot, on RHEL, Ubuntu, SUSE and Amazon Linux
+    description:
+      - Applies a named workload profile across three persistence layers -
+        runtime sysctls, load-time module options and limits, and boot-time
+        kernel arguments - then verifies the RUNNING kernel against the
+        desired state and reports what still needs a reboot.
+    options:
+      kernel_profile:
+        type: str
+        required: false
+        default: general
+        choices: [general, throughput, database, low-latency, container-host]
+        description:
+          - Workload posture. Defined in vars/profiles.yml, with a comment on
+            every value explaining what it does and what breaks without it.
+
+      kernel_sysctl_extra:
+        type: dict
+        required: false
+        default: {}
+        description:
+          - Runtime parameters merged OVER the profile's. The role owns the
+            profile, the caller owns this - setting the profile's variable
+            directly would replace the whole dict, not merge it.
+
+      kernel_cmdline_extra:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - Extra boot arguments, appended to the profile's. One argument per
+            list item; a single item containing a space is rejected, because
+            the kernel splits its command line on spaces.
+
+      kernel_modules_extra:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description:
+          - Extra modules to load at boot, added to the profile's.
+
+      kernel_module_options_extra:
+        type: dict
+        required: false
+        default: {}
+        description:
+          - Load-time module options, as module name => option string
+            ("hashsize=262144"). Merged over the profile's.
+
+      kernel_limits_extra:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        options:
+          domain:
+            type: str
+            required: true
+            description: Who the limit applies to - a user, @group, or * for everyone.
+          item:
+            type: str
+            required: true
+            choices: [core, data, fsize, memlock, nofile, rss, stack, cpu, nproc, as, maxlogins, priority, locks, sigpending, msgqueue, nice, rtprio]
+            description: The limit to set.
+          value:
+            type: raw
+            required: true
+            description: The value, or "unlimited".
+        description:
+          - Extra resource limits, added to the profile's. Each is written as
+            both a soft and a hard limit.
+
+      kernel_sysctl_file:
+        type: str
+        required: false
+        default: /etc/sysctl.d/90-canon-kernel.conf
+        description:
+          - Where the role's runtime parameters are written. The 90- prefix
+            sorts after the distribution's own drop-ins and before a 99- file
+            an operator adds deliberately.
+
+      kernel_sysctl_apply:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Load the values into the running kernel. Set false where the kernel
+            is not this host's to change - a container shares the host's
+            kernel, and writing /proc/sys from inside one is refused.
+
+      kernel_sysctl_strict:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Refuse to write a key that is not present in this kernel's
+            /proc/sys. Catches keys removed from the kernel, keys needing a
+            CONFIG option this kernel lacks, and keys whose module is not
+            loaded yet.
+
+      kernel_modules_file:
+        type: str
+        required: false
+        default: /etc/modules-load.d/canon-kernel.conf
+        description: Boot-time module list, read by systemd-modules-load.service.
+
+      kernel_modprobe_file:
+        type: str
+        required: false
+        default: /etc/modprobe.d/canon-kernel.conf
+        description: Load-time module options. No runtime equivalent exists.
+
+      kernel_limits_file:
+        type: str
+        required: false
+        default: /etc/security/limits.d/90-canon-kernel.conf
+        description: PAM resource limits for login sessions.
+
+      kernel_manage_bootloader:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Manage the boot arguments. The mechanism is chosen per
+            distribution in vars/family-*.yml.
+
+      kernel_grub_dropin:
+        type: str
+        required: false
+        default: /etc/default/grub.d/99-canon-kernel.cfg
+        description:
+          - Debian family only. Must sort LAST in /etc/default/grub.d, because
+            grub-mkconfig sources those files as shell and the last assignment
+            wins - including over an Ubuntu cloud image's 50- file.
+
+      kernel_regenerate_bootloader:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Run the distribution's bootloader generator after a change. False
+            stages the change for an image-build pipeline to generate later.
+
+      kernel_reboot_ok:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Allow the role to reboot to activate pending boot arguments.
+            Off by default, because a role that reboots when you did not ask
+            is a role nobody runs on a Friday.
+
+      kernel_reboot_timeout:
+        type: int
+        required: false
+        default: 600
+        description: Seconds to wait for the host to come back.
+
+      kernel_verify:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Compare the running kernel with the desired state after converging
+            and print both.
+
+      kernel_fail_on_reboot_required:
+        type: bool
+        required: false
+        default: false
+        description:
+          - Treat pending boot arguments as a failure. Off on a server, where
+            the reboot is a scheduling decision; ON in an image-build
+            pipeline, where an image that needs a reboot to be correct is not
+            a finished image.

@@ -1,0 +1,99 @@
+---
+# =============================================================================
+# LAYER 2: modules, and the options that can only be set as a module loads.
+#
+# Two separate files, for two separate jobs:
+#
+#   /etc/modules-load.d/*.conf   systemd-modules-load.service loads these at
+#                                boot. This is what makes br_netfilter present
+#                                on a fresh boot instead of "whenever something
+#                                happens to trigger it".
+#   /etc/modprobe.d/*.conf       parameters passed to the module AS IT LOADS.
+#                                Not adjustable afterwards.
+#
+# The second file is the reason this layer exists at all. nf_conntrack's
+# hashsize, a NIC driver's queue count, kvm's nested setting - none of them
+# have a runtime knob worth using. Written here, they apply to every future
+# load, including the one at boot.
+# =============================================================================
+
+- name: Modules | Ensure the module drop-in directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ kernel_modules_file | dirname }}"
+    - "{{ kernel_modprobe_file | dirname }}"
+
+# Declarative as a whole: one file owns the role's module list, so REMOVING a
+# module from the profile removes the line on the next run. One task per module
+# would leave the old entries behind forever - invisible drift, and the same
+# reason the sysctl layer uses a single templated file rather than one task
+# per key.
+- name: Modules | Write the boot-time module list
+  ansible.builtin.template:
+    src: modules-load.conf.j2
+    dest: "{{ kernel_modules_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Modules | Write load-time module options
+  ansible.builtin.template:
+    src: modprobe.conf.j2
+    dest: "{{ kernel_modprobe_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Load them now, so the sysctl keys they provide exist for the next task.
+#
+# Idempotent by checking /proc/modules first, so a second run reports no change.
+# Module names normalise hyphens to underscores in /proc/modules, which is why
+# the comparison translates them.
+#
+# A container cannot load a module: it shares the host's kernel and has no
+# CAP_SYS_MODULE. So this is skipped exactly where it cannot work - the same
+# way the baseline role skips service reloads without systemd - and the failures
+# are REPORTED rather than swallowed, because "the module I depend on did not
+# load" is not something to discover from a missing sysctl key later.
+- name: Modules | Load the configured modules now
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      loaded=""
+      failed=""
+      for m in {{ kernel_modules_effective | join(' ') }}; do
+        norm=$(printf '%s' "$m" | tr '-' '_')
+        if grep -q "^${norm} " /proc/modules; then
+          continue
+        fi
+        if modprobe "$m" 2>/dev/null; then
+          # A module built into the kernel loads successfully and never appears
+          # in /proc/modules. That is a success, not a silent failure.
+          grep -q "^${norm} " /proc/modules && loaded="$loaded $m"
+        else
+          failed="$failed $m"
+        fi
+      done
+      printf 'loaded:%s\nfailed:%s\n' "$loaded" "$failed"
+    executable: /bin/bash
+  register: kernel_modprobe
+  changed_when: kernel_modprobe.stdout_lines[0] != 'loaded:'
+  when:
+    - kernel_sysctl_apply | bool
+    - kernel_modules_effective | length > 0
+
+- name: Modules | Report modules that could not be loaded
+  ansible.builtin.debug:
+    msg: >-
+      Could not load: {{ kernel_modprobe.stdout_lines[1] | regex_replace('^failed:', '') }}.
+      They are configured in {{ kernel_modules_file }} and will be attempted at
+      the next boot. Any sysctl key they provide does not exist yet.
+  when:
+    - kernel_modprobe is not skipped
+    - kernel_modprobe.stdout_lines | length > 1
+    - kernel_modprobe.stdout_lines[1] != 'failed:'

@@ -1,0 +1,13 @@
+{{ ansible_managed | comment }}
+# Loaded at boot by systemd-modules-load.service, one module per line.
+#
+# These are here rather than left to whatever autoloads them, because a module
+# that appears "when something triggers it" is a module that is missing for the
+# first few seconds after every boot - and the sysctl keys it provides do not
+# exist until it is in.
+{% for module in kernel_modules_effective %}
+{{ module }}
+{% endfor %}
+{% if not kernel_modules_effective %}
+# (this profile needs no extra modules)
+{% endif %}

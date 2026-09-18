@@ -102,3 +102,29 @@ A hand-maintained patch spreadsheet fails in four ways, and only one of them is 
 | doesn't scale | effort grows with fleet size | effort is flat |
 
 **The run produces the record.** Per-host status, kernel before/after, reboot, packages and timing are written as each host finishes, so an aborted run still reports what it did. That record doubles as compliance evidence, as trend data (the same hosts failing every cycle point to a root cause), and as an exception list that keeps unreachable hosts visible. Once patching is cheap and safe, teams patch more often, and smaller deltas mean fewer surprises.
+
+## One role, several distributions
+
+The rule is the same one `platform-translation.md` gives for a second cloud: **keep the interface identical and write a per-platform implementation behind it.** Do not build one abstraction that tries to be every platform, because it becomes the lowest common denominator plus a pile of conditionals.
+
+`roles/kernel` is the worked example. Its inputs are the same everywhere; `vars/family-RedHat.yml`, `family-Debian.yml` and `family-Suse.yml` supply the mechanism, selected with `first_found` on `ansible_facts['os_family']` — with the *distribution* file tried before the *family* file, so Amazon Linux inherits RHEL's mechanics and overrides only what differs. An unsupported platform fails on the first task with a message naming it, rather than three tasks later with "file not found".
+
+Two things that generalise beyond kernel tuning:
+
+- **Those platform-loading tasks are tagged `always`.** They are prerequisites of every other tag, not a section of their own; without it, `--tags one_section` fails with an undefined variable (`RESEARCH.md` A19).
+- **`/bin/sh` is not portable for a shell task.** It is dash on Debian and Ubuntu, and dash has no `set -o pipefail` — which ansible-lint's `risky-shell-pipe` requires. All the mainstream server distributions ship bash, so `executable: /bin/bash` is the portable choice, which is the opposite of the usual advice and true for a specific reason (A17).
+
+## Declarative means removals work
+
+A role that can add a setting and cannot remove one is not declarative, and the gap is easy to miss because adding is what gets tested. Three shapes, in order of preference:
+
+1. **Own a whole file.** One templated file per concern — the sysctl drop-in, the module list, the limits file. Remove a key from the variables and the next run removes the line. This is why the `baseline` and `kernel` roles template a single file rather than using one module call per key: the per-key module is idempotent but leaves removed keys behind forever, which is invisible drift.
+2. **Own a drop-in in someone else's directory.** Same benefit, and it never has to parse a file you do not control.
+3. **Edit a shared file** — only when the distribution gives you no drop-in. Then you need a **key-aware merge** (strip what you own, append your current set, leave the vendor's alone) *and* a record of what you owned last time, because your current set can become empty. `roles/kernel` writes a marker comment for exactly that (A25).
+
+## Verify the effective state, not the file
+
+Two examples in this repository, and the pattern is worth applying to anything with a read order or a load step:
+
+- `sshd -T` after writing a drop-in, because sshd takes the **first** value it reads and a vendor file can sort earlier (A1).
+- `/proc/cmdline`, `/proc/sys` and `/sys` after kernel tuning, because a file can be correct while the running kernel is not — and the three outcomes are different: **active** is fine, **pending a reboot** is a scheduling decision, and **written, loaded, and still not the running value** is a failure, because something later in the read order owns that key.

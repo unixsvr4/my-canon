@@ -7,13 +7,17 @@ This file makes the repository reproducible and auditable: which versions were u
 | Tool | Version |
 |---|---|
 | macOS (Apple Silicon), Docker via OrbStack | Darwin 25.6, Docker 29.4.0 |
-| Terraform | 1.16.1 |
+| Terraform | 1.16.1 (≥ 1.7 needed for `mock_provider`) |
+| Terraform providers | hashicorp/aws 6.65.0, hashicorp/local 2.5.x, hashicorp/random 3.6.x |
 | tflint / trivy / checkov | 0.61.0 / 0.74.0 / 3.3.10 |
+| tflint rulesets | bundled terraform 0.14.1, tflint-ruleset-aws 0.44.0 |
 | ansible-core / ansible-lint | 2.21.4 / 26.8.0 |
-| Collections (pinned in `labs/lab2-ansible/requirements.yml`) | community.docker 5.3.0, ansible.posix 2.2.2, community.library_inventory_filtering_v1 1.1.5 |
+| Collections (pinned in `labs/lab2-ansible/requirements.yml`) | community.docker 5.3.0, ansible.posix 2.2.2, community.library_inventory_filtering_v1 1.1.5, amazon.aws 10.1.0, community.aws 10.1.0 |
 | Python / PyYAML / jq / GNU Make | 3.14.7 / 6.0.3 / 1.8.2 / 3.81 |
 | Lab host image | `almalinux:9` (AlmaLinux 9.8), aarch64 |
-| Real-parser checks (in container) | ISC `dhcp-server` and `pykickstart` from AlmaLinux 9 repositories |
+| Kernel-role images | `almalinux:9` (9.8), `ubuntu:24.04`, `registry.suse.com/bci/bci-base:15.6` (SLES 15.6), `amazonlinux:2023` — all aarch64, all free to pull |
+| Target interpreters | python3 3.9.25 (AlmaLinux, Amazon), 3.12.3 (Ubuntu), **3.11.14 (SLES — its own python3 is 3.6.15, which ansible-core cannot use)** |
+| Real-parser checks (in container) | ISC `dhcp-server`, `pykickstart` and `cloud-init` from AlmaLinux 9 repositories |
 
 ## 2. Sources
 
@@ -23,6 +27,32 @@ This file makes the repository reproducible and auditable: which versions were u
 - `terraform test`, `expect_failures`, and plan-time evaluation limits: Terraform documentation, *Tests*.
 - `optional()` object attributes with defaults (1.3+): Terraform documentation, *Type Constraints*.
 - S3-native state locking with `use_lockfile` (1.10+) and deprecation of `dynamodb_table` (1.11): [S3 native state locking](https://www.bschaatsbergen.com/s3-native-state-locking), [explainer](https://dev.to/aws-builders/terraform-state-locking-without-dynamodb-s3-native-locking-explained-448l).
+- `mock_provider`, `mock_resource`, `mock_data` and `override_resource` (1.7+): Terraform documentation, *Tests — Mocking and overrides*. The three behaviours that cost time (random values failing provider format validation, type-wide defaults, no force-replacement modelling) were established by running them — see T17–T19.
+
+**AWS**
+- ECS Fargate task definition and service arguments, deployment circuit breaker, `enable_execute_command`: AWS provider documentation for `aws_ecs_service` / `aws_ecs_task_definition`; ECS developer guide, *Deployment circuit breaker* and *Using Amazon ECS Exec*.
+- RDS-managed master credentials in Secrets Manager (`manage_master_user_password`), IAM database authentication, and static vs dynamic parameters (`apply_method = "pending-reboot"`): RDS user guide, *Password management with AWS Secrets Manager*, *IAM database authentication*, *Working with parameter groups*.
+- ALB target-group replacement requiring `create_before_destroy` with `name_prefix`, and the six-character `name_prefix` cap: AWS provider documentation for `aws_lb_target_group`; ELB API `CreateTargetGroup` limits.
+- `aws_vpc_security_group_ingress_rule` as the per-rule replacement for inline `ingress` blocks: AWS provider documentation, and the provider 5.x migration notes.
+- GitHub Actions OIDC federation, and the `sub` claim conditions that scope a role to a repository and ref: GitHub documentation, *Configuring OpenID Connect in Amazon Web Services*; AWS IAM guide, *Creating a role for web identity*.
+- Session Manager, the `community.aws.aws_ssm` connection plugin's S3 transfer bucket, and **hybrid activations** for non-EC2 machines: AWS Systems Manager user guide, *Session Manager* and *Managed instances in a hybrid and multicloud environment*; `community.aws.aws_ssm` connection plugin documentation.
+- `amazon.aws.aws_ec2` inventory plugin: `keyed_groups`, `compose`, `hostnames`, caching and `strict`: amazon.aws collection documentation.
+- EC2 Image Builder as the place kernel boot arguments belong for an autoscaled fleet: Image Builder user guide, *Build and test components*.
+
+**Kernel tuning**
+- Kernel command-line parameters and their absence of a runtime equivalent: `kernel-parameters.txt` in the Linux source tree.
+- RHEL 9 BLS entries, `grubby --update-kernel=ALL`, and updating `/etc/default/grub` so a newly installed kernel inherits the arguments: Red Hat documentation, *Configuring kernel command-line parameters* and *Managing boot entries*.
+- Debian/Ubuntu `/etc/default/grub.d/*.cfg` sourcing order: **verified by reading `/usr/sbin/grub-mkconfig` on `ubuntu:24.04`** (lines 160–169: `/etc/default/grub` first, then the drop-in directory in glob order, both sourced as shell — so the last assignment wins). Ubuntu cloud images ship `50-cloudimg-settings.cfg`, which is what makes the ordering matter.
+- SUSE bootloader configuration and `grub2-mkconfig`; `transactional-update grub.cfg` on read-only-root systems: SUSE documentation, *The boot loader GRUB 2*.
+- Transparent huge pages and database latency: MongoDB, Redis and Oracle documentation all specify `transparent_hugepage=never`; the runtime interface is `/sys/kernel/mm/transparent_hugepage/enabled`, which resets on boot.
+- `net.ipv4.tcp_tw_recycle` removed in Linux 4.12 (commit `4396e46187c`), and why `tcp_tw_reuse` is the one that is still safe: kernel `ip-sysctl.txt`.
+- `nf_conntrack` `hashsize` as a module load parameter rather than a sysctl: kernel `nf_conntrack-sysctl.txt` and the module's own parameters.
+- BBR requiring `fq`/`fq_codel` pacing: kernel `tcp.txt`; the BBR paper's pacing requirement.
+- Kubernetes node sysctls that break at scale (`fs.inotify.*`, `kernel.pid_max`, ARP `gc_thresh*`, `vm.max_map_count`): Kubernetes documentation, *Using sysctls in a cluster*, and the kubelet's own eviction documentation for cgroup v2 and PSI.
+- `pam_limits` applying to login sessions and **not** to systemd services (`DefaultLimitNOFILE` in `system.conf` instead): `limits.conf(5)` and `systemd-system.conf(5)`.
+
+**cloud-init**
+- `#cloud-config` as the format marker, `preserve_hostname`, and `cloud-init schema` as a validator: cloud-init documentation, *User data formats* and *CLI — schema*.
 
 **Ansible**
 - Role argument validation (`meta/argument_specs.yml`): Ansible documentation, *Roles — role argument validation*.
@@ -48,6 +78,10 @@ Reproduce everything automated with `make all`. Results as run:
 | Terraform static | `make lab1-static` | fmt clean; 8 roots `validate` OK; `tflint` rc=0 on all 8 |
 | Terraform scan | `make lab1-scan` | trivy: 0 misconfigurations (local-only resources; the gate exists for real providers) |
 | Module tests | `make lab1-test` | 16 passed, 0 failed (12 plan + 4 apply), ~2 s |
+| AWS static | `make lab1-aws-static` | 4 roots `validate` OK; `tflint` with ruleset-aws 0.44.0 rc=0 on all 4 |
+| AWS module tests | `make lab1-aws-test` | 22 passed, 0 failed (18 plan + 4 apply) against `mock_provider`, 2.7 s, no credentials |
+| AWS mutation | 11 mutations: shared value in every task definition, all rules to one target group, shared task role, credential into `environment`, HTTP listener, prod replica precondition removed, read-only root off, hard-coded alarm dimension, one shared log group, rules keyed per service only, database on a different key | each turns at least one run red; table in `aws/modules/app_stack/tests/README.md`. Mutation 1 is caught at run 3 (`remove_web`), not run 2 — an image change does not alter the *set* of service names |
+| AWS scan | `make lab1-scan` | trivy 0 misconfigurations across local and AWS, with 4 waivers reasoned inline (AVD-AWS-0053, 0104, 0177, 0089) |
 | Guard-rail mutation | remove prod replica precondition / `:latest` validation in a scratch copy | the matching test fails in each case |
 | Integration mutation | 7 mutations: shared deploy-id keepers, wrong listener target, HTTP listeners, hard-coded image, deletion protection off, `web` not removed, `create_before_destroy` restored | each turns at least one apply run red (table in `modules/app_stack/tests/README.md`) |
 | Live environments | `make lab1-e2e` | dev 9 + prod 15 applied; `verify-env.py` 6/6 on both; tamper → 3 checks fail; `apply` → 2 still fail; delete + `-replace` → 6/6; destroy 9 + 15; `--destroyed` 2/2 on both; ~7 s |
@@ -56,7 +90,12 @@ Reproduce everything automated with `make all`. Results as run:
 | Env roots | `terraform plan` / `apply` / `destroy` | dev 9 resources, prod 15 |
 | `for_each` isolation | plan removing `web` / bumping `api` image | only `web`'s 4 resources / only `api`'s 3 resources |
 | Terraform drift | tamper → `drift-check.sh` → apply → `drift-check.sh` | exit 2 + record → exit 0, record kept |
-| Ansible lint | `make lab2-static` | production profile: 0 failures |
+| Ansible lint | `make lab2-static` | production profile: 0 failures in 68 files (including the `kernel` role) |
+| AWS inventory parse | `make lab2-static` | `ansible-inventory -i inventory/aws_ec2.yml` parses; returns an empty `aws_ec2` group with no credentials |
+| Kernel role, four distributions | `tests/kernel-multidistro.sh` | 20 artifact assertions pass; `changed=0` on all four hosts on run 2. RHEL/Amazon get `GRUB_CMDLINE_LINUX`, SUSE `GRUB_CMDLINE_LINUX_DEFAULT`, Ubuntu a `99-` drop-in; negative assertions confirm neither family gets the other's key |
+| Kernel input contract | `tests/kernel-contract.sh` | 16 of 16. 7 inputs rejected with the expected message (unknown profile, bad limits item, missing domain, **removed sysctl key**, typo'd key, boot argument with whitespace, no sysctl binary) |
+| Kernel boot-argument merge | same script, against a seeded vendor `/etc/default/grub` | `crashkernel`, `resume`, `rd.lvm.lv`, `console` preserved; stale `hugepages=99` and `transparent_hugepage=always` removed; no key twice; switching to a profile with no boot arguments removes them and keeps the vendor's |
+| Kernel verification reporting | `make lab2-kernel-demo` | boot arguments pending 4 (rhel/database), 1 (ubuntu/throughput), 9 (suse/low-latency), 3 (amazon/container-host); THP state read from `/sys`, sysctl values compared against `/proc/sys` |
 | Converge | `ansible-playbook site.yml` | 6 hosts, `sshd effective config matches baseline` on all |
 | Idempotence | `tests/idempotence.sh` | 6 hosts, `changed=0` on run 2 |
 | Anti-patterns | idempotence test on `not-idempotent.yml` / `idempotent.yml` | 6 of 6 tasks changed / 0 changed |
@@ -65,10 +104,13 @@ Reproduce everything automated with `make all`. Results as run:
 | Effective-config check | `99-` drop-in on `web02` without `10-` | tasks succeed, `sshd -T` shows `permitrootlogin yes`, verify fails the host |
 | Rolling patch | `patch.yml`, then `--limit @reports/patch.retry` | stops after web01, web02, web03; db/app untouched; retry run: 3 of 3 patched |
 | Ansible drift | tamper db01 → `drift-check.sh` → converge → `drift-check.sh` | exit 2 (1 host, 2 tasks) + record → exit 0, record kept |
-| Bare-metal unit tests | `make lab3-test` | 20 passed |
+| Bare-metal unit tests | `make lab3-test` | 39 passed (20 physical, 19 cloud) |
+| Cloud record validation | `./scripts/validate_hosts.py` | 3 physical + 3 cloud valid; 11 kinds of bad cloud record rejected, including three fleet-level rules |
+| Tag contract | `test_tag_contract_produces_the_groups_the_playbooks_target` | rendered tags produce `tag_Environment_prod`, `tag_Role_database`, `tag_Service_api` and ≥ 2 `az_*` groups — the offline check on the Terraform-to-Ansible join |
 | Fallback-reader mutation | remove int parsing in the stdlib YAML reader | test fails |
 | Line-continuation mutation | wrap the kickstart `network` line | test fails |
-| Real parsers | `make lab3-artifacts` | `dhcpd -t` pass (and fails without the generated include); `ksvalidator -v RHEL9` pass on 3 files |
+| Real parsers | `make lab3-artifacts` | `dhcpd -t` pass (and fails without the generated include); `ksvalidator -v RHEL9` pass on 3 files; `cloud-init schema` pass on 3 files |
+| cloud-init gate mutation | unknown key (`package_updates`), then a missing `#cloud-config` first line | each rejected with `Invalid schema: user-data`, rc=1 — so the gate is not passing vacuously |
 | Acceptance play | `ansible-lint`, `--syntax-check` against generated inventory | pass / pass |
 
 ## 4. Bugs found while building this, and how
@@ -91,6 +133,13 @@ Reproduce everything automated with `make all`. Results as run:
 | T12 | Prod was only ever *planned* in the README walkthrough, so cleanup reported `0 destroyed` for prod and nothing had tested a live environment | a user running cleanup | Exercise A applies both roots; Exercise B verifies them; `make lab1-e2e` runs the lifecycle |
 | T13 | Permission drift is invisible to Terraform: `local_file` doesn't refresh file mode, so `plan` said *No changes* on a 0666 datastore and `apply` didn't fix it | `verify-env.py` still failing after a successful apply | documented as a plan blind spot; `integrity` check compares mode; remediated with `-replace` |
 | T14 | With the datastore missing, the verifier derived the environment from it and reported every object as mis-tagged | reading the failure output | environment taken from the first readable object |
+| T15 | `for_each` over `toset([443, 8443])` rejected: *"for_each supports maps and sets of strings, but you have provided a set containing type number"* — for_each keys are always strings | first `terraform test` run of the AWS module | a map keyed by `tostring(port)`, so `each.value` stays a number and nothing downstream converts it back |
+| T16 | The fix for T15 then failed with *"Two different items produced the key 443"*: two public services on the same port | the next run | `distinct()` BEFORE the map is built. Deduplicating inside a `for` expression is not possible — only `...` grouping is, which gives a list per port |
+| T17 | A mocked apply failed on every ARN-typed attribute: `"load_balancer_arn" (g37mq6n0) is an invalid ARN: arn: invalid prefix`. A mock invents a random 8-character string, and **the provider's own schema validation still runs**. Plan-only runs never hit it, because validation skips unknown values | switching the first integration run to `command = apply` | realistic `mock_resource`/`mock_data` defaults for anything another resource parses. `aws_iam_policy_document.json` needed one too (*"contains an invalid JSON policy: not a JSON object"*) |
+| T18 | The obvious fix for T17 would have **silently destroyed the tests**: a `mock_resource` default applies to every instance of that type, so defaulting `aws_lb_target_group.arn` gives `api` and `web` the same ARN and every "each rule forwards to its own target group" assertion passes proving nothing | noticing that a type-wide default and a per-key assertion cannot both be right | fixed ARNs only where the module has exactly one of something (the load balancer, the CMK); `override_resource` per address for everything per-key. `mock_resource` is per type, `override_resource` is per address |
+| T19 | `output.task_definition_arns["api"] != run.create...` failed even though the image had changed: **a mock does not model force-replacement**, so it returns the ARN it generated once. "Was this replaced?" is not a question a mock can answer, and an assertion phrased that way passes for the wrong reason | the coupling test failing on a correct module | the module publishes `task_definition_digests` — a digest of the rendered definition, computed by Terraform not the provider — which is honest under mocks, identical against a real account, and useful on its own for "did this commit change the api service?" |
+| T20 | An assertion was simply wrong: `add_a_port` claimed adding a port must **not** change the task definition. The module was right — the container has to listen on the port, so it appears in `portMappings` | the test failing on correct code | assertion inverted, and the comment records the reversal. Worth knowing before a change window: *"just add a port to the ALB" is a redeploy of the service* |
+| T21 | Plan-time assertions on `kms_key_id != null` and log-group ARNs failed with *"Condition expression could not be evaluated at this time"* — same family as T2, but from a *reference to another resource's* computed attribute rather than a rendered value | `terraform test` | plan runs assert only what is knowable from configuration; "everything is on the same CMK" moved to the apply run, where it is a stronger claim anyway |
 
 ### Ansible
 
@@ -112,6 +161,15 @@ Reproduce everything automated with `make all`. Results as run:
 | A14 | `lookup('file', ...)` reads the **controller**, not the target | wrong content | `command: cat` on the target |
 | A15 | Tampering before the baseline existed: `/etc/ssh` absent on fresh hosts | a user running the drift demo | `tamper.sh` refuses without a baseline and verifies the edit landed |
 | A16 | A first verification of the override case passed vacuously because the correct `10-` file was still present | noticing the result was too good | removed `10-` first; the check then failed as intended |
+| A17 | The kernel role's shell tasks failed on Ubuntu only: `/bin/sh: 1: set: Illegal option -o pipefail`. `/bin/sh` is dash on Debian and Ubuntu, and dash has no `pipefail` | the four-distribution run: RHEL passed, Ubuntu failed on the same task | `executable: /bin/bash` on the role's shell tasks — the *less* portable-looking choice is the portable one here, since all four distributions ship bash and ansible-lint's `risky-shell-pipe` requires pipefail. The one file that must stay POSIX sh is the grub drop-in, because `grub-mkconfig` sources it with `/bin/sh` |
+| A18 | Every module failed on SLES with `SyntaxError: future feature annotations is not defined`. The BCI base image's `python3` is **3.6.15**, and ansible-core's modules need ≥ 3.7 | the SUSE host failing at Gathering Facts | install `python311` and pin `ansible_python_interpreter`. An ancient system Python that cannot be removed, beside a modern one, is the normal state of a long-lived enterprise distribution — the interpreter has to be chosen, not discovered |
+| A19 | `--tags kernel_bootloader` failed with *"'kernel_grub_file' is undefined"*: the tag filter skipped the tasks that load the per-distribution mechanism | running exactly that command to test one section | `tags: [always]` on the four platform/profile-loading tasks. They are prerequisites of every other tag, not a section of their own |
+| A20 | Every `--check` run failed with *"object of type 'dict' has no attribute 'rc'"*. The `raw` interpreter probe is skipped in check mode, so the following `when: kernel_python.rc != 0` had nothing to read — which broke the whole input-contract suite for the wrong reason | the first run of `tests/kernel-contract.sh`: 7 of 7 cases "failed" with rc=2 | `check_mode: false` on the probe; it is read-only |
+| A21 | `validate:` on the sysctl file would have been actively harmful: `sysctl -p <file>` **parses and applies** in one step and has no dry-run flag, so it would apply values from a temporary file before Ansible decided to keep it — and fail outright where `/proc/sys` is not writable | writing the task by analogy with the `sshd -t` and `visudo -c` validations | no `validate:`; the safety net is the `/proc/sys` key-existence check before anything is written. Knowing which of your config files can be checked by their own parser, and what to do about the ones that cannot, is the difference between a habit and a practice |
+| A22 | ansible-lint's production profile raised 73 × `var-naming[no-role-prefix]`: role variables must be prefixed with the **role name**, and the role was `kernel_tuning` with `kernel_*` variables | `ansible-lint` after the role was working | renamed the role to `kernel`. The alternative was `kernel_tuning_sysctl_extra` everywhere; the rule is right and the shorter name is better |
+| A23 | `schema[meta]`: Galaxy's platform list does not know Amazon Linux 2023 — it accepts only 6.1, 7.1, 7.2 or `all` | the same lint run | `versions: [all]`, with a comment saying the role is actually tested on 2023 |
+| A24 | A test case was wrong, not the code: it asserted that requesting a runtime sysctl load on Ubuntu would be refused for lack of `procps`. `ubuntu:24.04` **does** ship `sysctl` | the case failing with rc=0 | the missing binary is simulated by pointing `kernel_sysctl_binary` at a path that is not there, which is the real state of a minimal image before the baseline role runs. The comment records the wrong assumption |
+| A25 | **The role could add a boot argument and never remove one.** With the profile switched to one that owns no boot arguments, there were no keys to strip, so `transparent_hugepage=never` stayed on the line forever — coming back after every reboot with no line in any playbook to explain it | a contract-test case written for exactly this, which failed | the role records the keys it owns in a `# canon-kernel-managed:` marker in the file and strips **previous ∪ current** on the next run. Declarative means removals work, and removals need a record of what you previously owned. The Debian drop-in needs no marker: everything it manages lives in its own file, which is the real argument for drop-in directories over editing shared files |
 
 ### Bare metal
 
@@ -122,10 +180,15 @@ Reproduce everything automated with `make all`. Results as run:
 | B3 | `%packages --minimal` isn't a valid option | `ksvalidator` | removed; `@^minimal-environment` already selects the minimal set |
 | B4 | Generated DHCP reservations spanning two subnets were included inside one subnet block | reviewing ISC dhcpd scoping | include at global scope |
 | B5 | `cat | grep` pipeline without `pipefail` in the acceptance play would mask a missing bond | ansible-lint `risky-shell-pipe` | `grep` reads the file directly |
+| B6 | The new cross-file hostname rule **rejected the fixture added for it**: `canon-db01` existed in both `hosts.yml` and `cloud-hosts.yml` | the first run of `./scripts/validate_hosts.py` after adding the cloud half | renamed the cloud instance to `canon-pg01`. The rule earned its keep before it was committed, which is the best argument for fleet-level rules over record-by-record review |
+| B7 | The `cloud-init schema` gate could have been vacuous | deliberately breaking a rendered file twice | an unknown key (`package_updates` for `package_update`) and a missing `#cloud-config` first line were each rejected with rc=1. The second is the dangerous one: without that line cloud-init treats the file as a shell script and ignores the whole thing, so the instance boots, passes its health check, and ran none of its configuration |
 
 ## 5. Known limits
 
-- Lab resources are local stand-ins. Real-provider behaviour (API errors, eventual consistency, provider-specific ForceNew attributes) is described, not exercised.
-- Lab hosts are containers without systemd or their own kernel, so service reloads and `sysctl -p` are skipped by design. Those handler paths run on VMs and physical hosts.
-- `bmc_baseline.sh` and `acceptance.yml` target hardware that doesn't exist here; they are syntax-checked and linted, not executed.
-- The CI workflow calls the verified `make` targets but hasn't yet run on GitHub-hosted runners.
+- The $0 lab resources are local stand-ins. `labs/lab1-terraform/aws/` is the real provider, but it is **apply-tested against mocks**, and a mock is not AWS: it accepts an invalid subnet id, an ALB name already taken in the account, a Fargate cpu/memory pair the API rejects, an IAM policy that denies what the task needs, or a quota already reached. It also does not model force-replacement (T19). API errors, eventual consistency and provider-specific ForceNew behaviour are described, not exercised. The missing gate is a nightly apply/destroy into a sandbox account.
+- **Neither AWS environment root is applied by any target.** Applying costs money and touches a real account, so it stays a deliberate act; the cost table in `aws/README.md` says what it would be, and the NAT gateway is usually the surprise.
+- The `aws_ec2` dynamic inventory and the Session Manager connection are **reviewed, not run**: both need credentials. `make lab2-static` proves the plugin is installed and the configuration parses. Worth knowing: without credentials the plugin returns an **empty group rather than an error**, so "no hosts matched" is what a missing identity looks like.
+- Lab hosts are containers without systemd or their own kernel, so service reloads and `sysctl -p` are skipped by design, and the kernel role's `kernel_sysctl_strict` check is disabled for them (inside a container `/proc/sys` is the *host's* key set, not the distribution's). Those paths run on VMs and physical hosts, and `tests/kernel-contract.sh` exercises the strict check by turning it on with a key no kernel has any more.
+- The kernel role's **boot-argument layer is verified by its artifacts, not by a reboot.** A container has no bootloader, so the generator step reports that it could not run and the arguments are staged — correct in an image build, and a gap here: the role's post-reboot confirmation path (`kernel_reboot_ok: true`) is written and syntax-checked, not executed.
+- `bmc_baseline.sh`, `ssm_hybrid_register.sh` and `acceptance.yml` target hardware and an AWS account that don't exist here; they are syntax-checked and linted, not executed. The hybrid-activation script's source-of-truth guard *is* exercised.
+- The tag contract between the three labs is asserted on the **rendered** tags and the **module's** tags independently. Nothing compares the two sets automatically, so adding a tag to lab 1's module and not to lab 3's renderer would pass both suites.

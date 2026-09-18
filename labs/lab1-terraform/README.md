@@ -15,6 +15,9 @@ Runs entirely on your machine with the `local`, `random` and built-in `terraform
 | Drift detection with an immutable record that survives remediation | `drift-check.sh`, `drift-show.py` | Exercise F |
 | State recovery: out-of-band deletion, `import` blocks, `-replace` | — | Exercise G |
 | `count` vs `for_each`, nested keys, and `moved`-block migrations | `examples/` | Exercise H |
+| **The same module on real AWS**, apply-tested with `mock_provider` at no cost | [`aws/`](aws/) | [`aws/README.md`](aws/README.md) |
+
+The resources in this directory are `local_file` stand-ins, so the lab is free and offline. [**`aws/`**](aws/) is the same module against the real `aws` provider — ECS Fargate, ALB, RDS, IAM, KMS — with 22 `terraform test` runs against a mocked provider, so real cloud infrastructure is apply-tested on every commit with no account and no bill. Read the two side by side: the `for_each` patterns are identical, and every stand-in maps to the resource it models.
 
 ## Layout
 

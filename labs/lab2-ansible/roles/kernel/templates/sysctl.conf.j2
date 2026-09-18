@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+# Profile: {{ kernel_profile }}   Host: {{ inventory_hostname }}
+#
+# Loaded at boot by systemd-sysctl.service, and now by the role's handler.
+# dictsort keeps the key order stable, so an unchanged set of values renders a
+# byte-identical file and the task stays "ok" instead of reporting a false
+# change on every run.
+{% for key, value in (kernel_sysctl_effective | dictsort) %}
+{{ key }} = {{ value }}
+{% endfor %}

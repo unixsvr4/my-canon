@@ -1,0 +1,112 @@
+---
+# =============================================================================
+# kernel - defaults
+#
+# Kernel tuning that SURVIVES A REBOOT, on RHEL, Ubuntu, SUSE and Amazon Linux,
+# from one role with one interface.
+#
+# The role exists because "I set a sysctl" is three different problems wearing
+# one hat:
+#
+#   LAYER 1  runtime parameters      /etc/sysctl.d/   -> live now, and on boot
+#   LAYER 2  load-time parameters    /etc/modprobe.d/ -> only when the module loads
+#            and resource limits     /etc/security/limits.d/
+#   LAYER 3  boot-time parameters    the bootloader   -> ONLY after a reboot
+#
+# Putting a layer-3 setting in layer 1 is the classic failure: it is accepted,
+# it changes nothing, and nobody notices until the incident it was supposed to
+# prevent. transparent_hugepage is not a sysctl. nf_conntrack's hash size can
+# only be set as the module loads. 1GB hugepages can only be reserved at boot.
+# This role puts each setting where the kernel will actually read it, and then
+# REPORTS which ones are configured but not yet running.
+#
+# Everything is prefixed `kernel_` so it cannot collide with another role.
+# =============================================================================
+
+# --- What to tune -------------------------------------------------------------
+# A named workload posture. The profiles live in vars/profiles.yml, with a
+# comment on every value explaining what it does and what breaks without it.
+#
+#   general         a safe baseline for any server
+#   throughput      high-bandwidth network services: proxies, CDN, ingest
+#   database        PostgreSQL / MySQL / MongoDB on the host
+#   low-latency     latency-sensitive processing: pinned cores, no deep C-states
+#   container-host  a Kubernetes node or container host
+kernel_profile: general
+
+# Caller additions, merged OVER the profile. Same `_extra` pattern as the
+# baseline role: Ansible replaces dicts and lists at higher precedence rather
+# than merging, so a group_vars file setting `kernel_sysctl` would silently drop
+# every profile value. The role owns the profile; the caller owns `_extra`.
+kernel_sysctl_extra: {}
+kernel_cmdline_extra: []
+kernel_modules_extra: []
+kernel_module_options_extra: {}
+kernel_limits_extra: []
+
+# --- Layer 1: runtime parameters ----------------------------------------------
+kernel_sysctl_file: /etc/sysctl.d/90-canon-kernel.conf
+
+# Load the values into the running kernel now. Set false where the kernel is
+# not this host's to change: a container shares the host's kernel, and writing
+# /proc/sys from inside one is refused.
+kernel_sysctl_apply: true
+
+# Refuse to write a key that does not exist under /proc/sys on this host.
+#
+# This is the single most useful check in the role. A sysctl that the running
+# kernel does not implement is silently ignored by `sysctl --system` on some
+# distributions and a hard error on others, and the reason is almost always one
+# of three things: the key was REMOVED from the kernel
+# (net.ipv4.tcp_tw_recycle, gone since 4.12, still in tuning guides everywhere),
+# it needs a CONFIG option this kernel was not built with
+# (kernel.sched_migration_cost_ns needs CONFIG_SCHED_DEBUG), or its MODULE is
+# not loaded yet (net.netfilter.nf_conntrack_max does not exist until
+# nf_conntrack is). The third case is why modules are configured before sysctls.
+kernel_sysctl_strict: true
+
+# --- Layer 2: load-time parameters and limits ---------------------------------
+kernel_modules_file: /etc/modules-load.d/canon-kernel.conf
+kernel_modprobe_file: /etc/modprobe.d/canon-kernel.conf
+kernel_limits_file: /etc/security/limits.d/90-canon-kernel.conf
+
+# --- Layer 3: the bootloader --------------------------------------------------
+# Write the boot arguments. The MECHANISM differs per distribution and is
+# selected from vars/family-*.yml; the interface here does not change.
+kernel_manage_bootloader: true
+
+# The comment the role writes into /etc/default/grub to record WHICH boot
+# argument keys it owns. Read back on the next run so that removing an argument
+# from a profile removes it from the boot line - see tasks/bootloader-file.yml.
+# The Debian drop-in needs no marker: everything it manages lives in its own
+# file.
+kernel_marker: canon-kernel-managed
+
+# Drop-in name for the Debian family. It must sort LAST, because
+# /usr/sbin/grub-mkconfig sources /etc/default/grub and then every
+# /etc/default/grub.d/*.cfg in glob order, and the last assignment wins. Ubuntu
+# cloud images ship 50-cloudimg-settings.cfg, which sets
+# GRUB_CMDLINE_LINUX_DEFAULT - a 40- file would lose silently. Same failure as
+# the sshd drop-in in the baseline role, opposite direction.
+kernel_grub_dropin: /etc/default/grub.d/99-canon-kernel.cfg
+
+# Regenerate the bootloader configuration after changing it. Off means the file
+# is managed but the change is staged for whoever runs the generator next -
+# which is a legitimate choice in an image-build pipeline.
+kernel_regenerate_bootloader: true
+
+# NEVER reboot by default. A role that reboots when you did not ask is a role
+# nobody runs on a Friday. When false, the role reports what is pending instead.
+kernel_reboot_ok: false
+kernel_reboot_timeout: 600
+
+# --- Verification -------------------------------------------------------------
+# After converging, compare the DESIRED state with the RUNNING kernel
+# (/proc/cmdline, /proc/sys, /sys) and print both. See tasks/verify.yml.
+kernel_verify: true
+
+# Whether a pending reboot is a failure or a report. It is a report by default:
+# the role did its job, the reboot is a scheduling decision. Set true in a
+# build pipeline, where "the image needs a reboot to be correct" means the
+# image is not finished.
+kernel_fail_on_reboot_required: false

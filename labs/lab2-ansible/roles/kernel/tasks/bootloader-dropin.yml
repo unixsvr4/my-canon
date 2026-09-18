@@ -1,0 +1,38 @@
+---
+# =============================================================================
+# Debian / Ubuntu: a drop-in in /etc/default/grub.d.
+#
+# grub-mkconfig SOURCES these files as shell after reading /etc/default/grub,
+# in glob order, so the role's 99- file is read last and wins. That is also
+# what lets the drop-in be written WITHOUT reading anybody else's file first:
+# it can filter the value it inherits at generation time.
+#
+# See templates/grub-dropin.cfg.j2 for the filtering, and family-Debian.yml for
+# the verified sourcing order.
+# =============================================================================
+
+- name: Bootloader | Ensure /etc/default/grub.d exists
+  ansible.builtin.file:
+    path: "{{ kernel_grub_dropin | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Bootloader | Write the grub drop-in
+  ansible.builtin.template:
+    src: grub-dropin.cfg.j2
+    dest: "{{ kernel_grub_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    # A drop-in that grub cannot parse breaks `update-grub` for everyone, not
+    # just for this role's arguments - and on some layouts it produces a
+    # grub.cfg with no entries at all. `sh -n` is the same parser that will
+    # source it, so a syntax error never reaches disk.
+    validate: /bin/sh -n %s
+  register: kernel_dropin_written
+
+- name: Bootloader | Record whether the boot arguments changed
+  ansible.builtin.set_fact:
+    kernel_cmdline_changed: "{{ kernel_dropin_written is changed }}"

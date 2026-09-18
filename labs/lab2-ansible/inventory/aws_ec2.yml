@@ -1,0 +1,119 @@
+---
+# =============================================================================
+# aws_ec2.yml - the production inventory: EC2 asks AWS what exists.
+#
+# The static inventory/hosts.yml next to this file is the lab's; this is what
+# replaces it on AWS. The reason to prefer it is not convenience - it is that a
+# hand-maintained host list is itself a drift surface. A server that exists and
+# is not in the file is never patched, never checked and never in a drift
+# report, and nothing in the pipeline notices. Asking the API removes the
+# possibility.
+#
+#   ansible-inventory -i inventory/aws_ec2.yml --graph
+#   ansible-playbook  -i inventory/aws_ec2.yml site.yml --limit tag_Role_web
+#   ansible-playbook  -i inventory/aws_ec2.yml kernel.yml --limit tag_Environment_prod
+#
+# Requires credentials (a role assumed by the pipeline, or a local profile), so
+# it is not exercised by `make all` - see the note at the bottom of
+# ../README.md about what in this repository is run and what is reviewed.
+#
+# THE CONTRACT WITH TERRAFORM
+# Every group below is derived from a TAG, and those tags are stamped by lab 1's
+# Terraform module - Environment, ManagedBy, Module and Service are the module's
+# mandatory tag contract (aws/modules/app_stack/main.tf), enforced by a
+# `terraform test` assertion. That is the whole handoff: Terraform creates the
+# machine and tags it, Ansible finds it by tag. Neither one keeps a list of the
+# other's resources, so the two cannot disagree.
+# =============================================================================
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - us-east-1
+  - us-west-2
+
+# --- What to include ----------------------------------------------------------
+filters:
+  # A terminated or stopped instance is not a host. Without this filter, a
+  # scaled-in instance stays in the inventory until AWS forgets it, and every
+  # play reports unreachable hosts that are not actually a problem - which is
+  # how real unreachable hosts stop being noticed.
+  instance-state-name:
+    - running
+
+  # Only instances this platform owns. An account almost always has instances
+  # someone else created; configuring them because they happened to be in the
+  # same region is how an automation gets a reputation.
+  tag:ManagedBy: terraform
+
+# --- Names -------------------------------------------------------------------
+# Prefer the Name tag, fall back to the private DNS name. NOT the public IP:
+# it changes on stop/start, and an inventory name that changes breaks every
+# per-host record, retry file and drift history that refers to it.
+hostnames:
+  - tag:Name
+  - private-dns-name
+
+# --- Groups ------------------------------------------------------------------
+# Each keyed_group turns one tag into groups, so group_vars/ files that already
+# exist for the lab (web.yml, db.yml, app.yml) apply unchanged to real
+# instances. That is the point: the same group names on both sides means the
+# same roles and the same tuning, whether the host is a container here, an EC2
+# instance, or a physical server lab 3 built.
+keyed_groups:
+  - key: tags.Service
+    prefix: tag_Service
+    separator: _
+
+  - key: tags.Environment
+    prefix: tag_Environment
+    separator: _
+
+  # The workload tier, which is what decides the kernel profile. An instance
+  # tagged Role=db lands in tag_Role_db, and group_vars can give that group
+  # kernel_profile: database - so a new database instance is tuned correctly
+  # the first time it converges, with nobody editing an inventory.
+  - key: tags.Role
+    prefix: tag_Role
+    separator: _
+
+  # Availability zone, for rollouts that must not take out two AZs at once.
+  # patch.yml's `serial` batches mean nothing if the batch is one AZ.
+  - key: placement.availability_zone
+    prefix: az
+    separator: _
+
+  # Instance type, which is how "only the Graviton instances" or "only the
+  # metal instances" becomes a --limit rather than a spreadsheet.
+  - key: instance_type
+    prefix: type
+    separator: _
+
+# --- Per-host variables -------------------------------------------------------
+compose:
+  # Connect over the PRIVATE address. Instances in a private subnet have no
+  # public address at all, which is the correct design - see the SSM connection
+  # in group_vars/aws.yml for how the controller reaches them without one.
+  ansible_host: private_ip_address
+
+  # Carry the instance id through as a fact, so a per-host record in
+  # reports/run/ can be correlated with CloudWatch, the ASG and the console.
+  # A hostname is not a stable identifier on a fleet that scales.
+  ec2_instance_id: instance_id
+  ec2_availability_zone: placement.availability_zone
+  ec2_instance_type: instance_type
+
+# --- Caching ------------------------------------------------------------------
+# A fleet-wide play otherwise re-describes every instance for every task batch.
+# Two minutes is short enough that a scale-out is picked up by the next run and
+# long enough that one playbook run makes one set of API calls - which matters
+# because DescribeInstances is rate-limited per account, and a busy afternoon of
+# pipelines can hit it.
+cache: true
+cache_plugin: ansible.builtin.jsonfile
+cache_connection: /tmp/.ansible-aws-inventory
+cache_timeout: 120
+
+# Strict: fail loudly if a `compose` or `keyed_groups` expression cannot be
+# resolved, instead of silently producing hosts with no ansible_host and a play
+# that tries to SSH to the inventory name.
+strict: true

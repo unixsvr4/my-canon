@@ -11,3 +11,14 @@ collections:
     version: 2.2.2
   - name: community.library_inventory_filtering_v1
     version: 1.1.5
+  # The AWS collections are needed by inventory/aws_ec2.yml (the dynamic
+  # inventory plugin) and inventory/group_vars/aws_ec2.yml (the Session Manager
+  # connection plugin). They are pinned for the same reason as the others, and
+  # they are installed by setup.sh even though the lab's own hosts are
+  # containers - so that `ansible-inventory -i inventory/aws_ec2.yml --graph`
+  # fails on missing CREDENTIALS rather than on a missing collection, which is
+  # a much clearer thing to read.
+  - name: amazon.aws
+    version: 10.1.0
+  - name: community.aws
+    version: 10.1.0

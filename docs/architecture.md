@@ -62,3 +62,18 @@ Anti-pattern: a `local-exec` provisioner that calls `ansible-playbook`. Configur
 ## Same roles everywhere
 
 Keeping the OS install thin means the layer above the hardware stops caring whether it *is* hardware. The `baseline` role in lab 2 runs unchanged on a container, a VM, or a server built by lab 3's pipeline. Only the connection settings differ. Divergence between physical and virtual estates shows up in configuration code first, so one role library for both is what keeps a hybrid estate manageable.
+
+## The same model on AWS
+
+Nothing in the layer ownership changes; the tools in each slot do, and one constraint is added. [`aws-platform.md`](aws-platform.md) is the detail. In summary:
+
+| Layer | On-premises | On AWS |
+|---|---|---|
+| the machine exists | iPXE + kickstart from `hosts.yml` | the EC2 API, from `cloud-hosts.yml` via Terraform |
+| identity at first boot | kickstart `%post` (minimal, by design) | cloud-init user data (minimal, for the same reason — both run once and are then invisible drift) |
+| the handoff | a rendered inventory file | **tags.** Terraform stamps them, `aws_ec2` groups on them, and neither side keeps a list of the other's resources |
+| access | SSH with a key from a vault | Session Manager: no inbound rule, no bastion, no key; IAM authorises and CloudTrail records |
+| inside the machine | `baseline` + `kernel` + `patch` | the same roles, unchanged |
+| **boot-time kernel settings** | Ansible, then a scheduled reboot | **the AMI**, because a change to a running Auto Scaling instance is discarded by the next instance refresh |
+
+That last row is the only real asymmetry, and it is the same lesson as a kickstart `%post`: a one-time change to a machine that will be replaced is drift with a delay on it.

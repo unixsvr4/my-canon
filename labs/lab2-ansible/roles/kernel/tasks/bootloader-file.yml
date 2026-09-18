@@ -1,0 +1,156 @@
+---
+# =============================================================================
+# RHEL / Amazon Linux / SUSE: edit GRUB_CMDLINE_LINUX(_DEFAULT) in place.
+#
+# These families have no /etc/default/grub.d, so the role has to modify a file
+# it does not own - and that means a READ, a KEY-AWARE MERGE, and a write.
+#
+# The merge is the part most examples get wrong. Appending the arguments is
+# idempotent-looking and wrong: change hugepages=8 to hugepages=16 and the line
+# ends up with both. The kernel takes the last value for most duplicated
+# parameters, so it appears to work, and then one day an argument the kernel
+# reads FIRST is duplicated and the older value wins.
+#
+# So the merge drops every argument whose KEY this role manages, then appends
+# the role's current set. Removing an argument from the profile removes it from
+# the line, and the distribution's own arguments (crashkernel, resume,
+# rd.lvm.lv, console) are preserved untouched.
+# =============================================================================
+
+- name: Bootloader | Read the current boot arguments and the ownership marker
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      if [ -f {{ kernel_grub_file | quote }} ]; then
+        # Source it the way grub does, then print the one variable. Parsing it
+        # with grep/sed would mishandle quotes, continuations and "$OTHER_VAR"
+        # references, all of which appear in real vendor files.
+        . {{ kernel_grub_file | quote }} 2>/dev/null || true
+        printf 'ARGS:%s\n' "${{ '{' }}{{ kernel_grub_cmdline_key }}:-}"
+        # The keys this role owned on the PREVIOUS run (see the marker below).
+        sed -n 's/^# {{ kernel_marker }}: *//p' {{ kernel_grub_file | quote }} | head -1 | sed 's/^/OWNED:/'
+      fi
+    executable: /bin/bash
+  register: kernel_grub_current
+  changed_when: false
+  check_mode: false
+
+- name: Bootloader | Separate the current line from the previous ownership
+  ansible.builtin.set_fact:
+    kernel_grub_args: >-
+      {{ (kernel_grub_current.stdout_lines | select('match', '^ARGS:') | first | default('ARGS:'))[5:] }}
+    kernel_owned_before: >-
+      {{ (kernel_grub_current.stdout_lines | select('match', '^OWNED:') | first | default('OWNED:'))[6:] | split() }}
+
+# ---------------------------------------------------------------------------
+# THE KEYS TO STRIP: what the role owns NOW, plus what it owned BEFORE.
+#
+# The second half is not redundancy, it is the only way an in-place edit can be
+# declarative. Switch a host from the `database` profile to `general` and the
+# role suddenly manages no boot arguments at all - so with only the current
+# keys there is nothing to match, and transparent_hugepage=never stays on the
+# boot line forever. It would come back after every reboot, with no line in any
+# playbook to explain it.
+#
+# So the role records what it owns in a marker comment in the file and reads it
+# back on the next run. "Declarative" means removals work, and removals need a
+# record of what you previously owned.
+#
+# The Debian drop-in needs none of this: everything it manages lives in ITS OWN
+# file, so rewriting that file with fewer arguments removes them by
+# construction. That is the real argument for drop-in directories over editing
+# shared files, and it is why the two implementations differ rather than sharing
+# one clever abstraction.
+# ---------------------------------------------------------------------------
+- name: Bootloader | Compute the keys to replace
+  ansible.builtin.set_fact:
+    # "hugepages=8" -> "hugepages", "idle=poll" -> "idle". regex_escape matters
+    # because keys contain dots (intel_idle.max_cstate), and an unescaped dot
+    # would match any character.
+    kernel_managed_keys: >-
+      {{ kernel_cmdline_effective | map('regex_replace', '=.*$', '') | list }}
+    kernel_strip_keys: >-
+      {{ (
+           (kernel_cmdline_effective | map('regex_replace', '=.*$', '') | list)
+           + kernel_owned_before
+         ) | unique | map('regex_escape') | list }}
+
+- name: Bootloader | Keep the distribution's arguments, replace ours
+  ansible.builtin.set_fact:
+    kernel_cmdline_merged: >-
+      {{ (
+           kernel_grub_args.split()
+           | reject('match', '^(' + (kernel_strip_keys | join('|')) + ')(=|$)')
+           | list
+           + kernel_cmdline_effective
+         ) | join(' ') }}
+  when: kernel_strip_keys | length > 0
+
+- name: Bootloader | Nothing owned now or before, keep the line untouched
+  ansible.builtin.set_fact:
+    kernel_cmdline_merged: "{{ kernel_grub_args }}"
+  when: kernel_strip_keys | length == 0
+
+# Written BEFORE the argument line, so that if the run is interrupted between
+# the two tasks the next run still knows what to strip. Ordering a
+# read-modify-write so that the ownership record is never behind the data is
+# the same instinct as writing a journal entry before the change it describes.
+- name: Bootloader | Record which keys this role owns
+  ansible.builtin.lineinfile:
+    path: "{{ kernel_grub_file }}"
+    regexp: "^# {{ kernel_marker }}:"
+    line: "# {{ kernel_marker }}: {{ kernel_managed_keys | join(' ') }}"
+    insertbefore: BOF
+    owner: root
+    group: root
+    mode: "0644"
+    create: true
+    validate: /bin/sh -n %s
+
+# On a host that has no /etc/default/grub at all (a container, a minimal image),
+# `create: true` writes one. That is deliberate: the file is what a future boot
+# configuration would be generated from, so managing it is right even where
+# nothing can read it yet - and it is what makes this layer testable without a
+# bootloader. The generator step in bootloader.yml reports that it could not run.
+- name: Bootloader | Set the boot arguments
+  ansible.builtin.lineinfile:
+    path: "{{ kernel_grub_file }}"
+    regexp: "^{{ kernel_grub_cmdline_key }}="
+    line: '{{ kernel_grub_cmdline_key }}="{{ kernel_cmdline_merged }}"'
+    owner: root
+    group: root
+    mode: "0644"
+    create: true
+    # A malformed /etc/default/grub breaks the next kernel update's
+    # bootloader regeneration, on a host nobody is watching at the time.
+    validate: /bin/sh -n %s
+  register: kernel_grub_written
+
+# --- grubby: the existing boot entries ----------------------------------------
+#
+# The file above is what a NEWLY INSTALLED kernel inherits. It does nothing to
+# the entries already in /boot/loader/entries, so on the RHEL family grubby
+# updates those too. Skipping this step is how tuning "works" until the next
+# `dnf update kernel`, then silently reverts - with no configuration change to
+# point at.
+#
+# --remove-args first, then --args: grubby appends, so without the removal a
+# changed value would appear twice on the entry's options line.
+- name: Bootloader | Update the existing boot entries with grubby
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      grubby --update-kernel=ALL --remove-args={{ (kernel_cmdline_effective | map('regex_replace', '=.*$', '') | join(' ')) | quote }}
+      grubby --update-kernel=ALL --args={{ (kernel_cmdline_effective | join(' ')) | quote }}
+      grubby --info=DEFAULT | sed -n 's/^args="\(.*\)"$/\1/p'
+    executable: /bin/bash
+  register: kernel_grubby
+  changed_when: true
+  when:
+    - kernel_use_grubby | bool
+    - kernel_cmdline_effective | length > 0
+    - "'grubby' in kernel_boot_tools.stdout.split()"
+
+- name: Bootloader | Record whether the boot arguments changed
+  ansible.builtin.set_fact:
+    kernel_cmdline_changed: "{{ kernel_grub_written is changed }}"

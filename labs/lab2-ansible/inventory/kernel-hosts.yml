@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# The multi-distribution kernel lab: four containers, four distributions.
+#
+#   ktr-rhel     AlmaLinux 9      RHEL 9 family: BLS entries + grubby
+#   ktr-ubuntu   Ubuntu 24.04     /etc/default/grub.d drop-in + update-grub
+#   ktr-suse     SLES 15 (BCI)    /etc/default/grub + grub2-mkconfig
+#   ktr-amazon   Amazon Linux 2023  RHEL mechanics, AMI/ASG lifecycle
+#
+# Created by ./setup-distros.sh. They stand in for four real hosts: the role,
+# the profiles and the per-distribution mechanisms are identical on VMs, on
+# EC2 instances and on the physical servers Lab 3 builds. What a container
+# cannot do is own a kernel, which is exactly why the two variables below are
+# set the way they are - and why the role REPORTS a pending reboot instead of
+# claiming success.
+#
+# Each host gets a DIFFERENT profile on purpose. It is the honest test of
+# reusability: one role, four distributions, four workload postures, no
+# per-host code.
+# =============================================================================
+all:
+  children:
+
+    kernel_tuned:
+      vars:
+        ansible_connection: community.docker.docker
+        ansible_user: root
+
+        # A container shares the host's kernel and cannot write /proc/sys, so
+        # the files are managed (and therefore drift-detectable) while the
+        # "load it now" step is skipped. On a VM or bare metal, leave the
+        # default - this is the same accommodation the baseline role makes for
+        # containers without systemd.
+        kernel_sysctl_apply: false
+
+        # The strict key check compares against /proc/sys, which inside a
+        # container is the HOST's kernel, not the distribution's. A key that
+        # AlmaLinux 9's own kernel has may be missing from the container host's
+        # kernel, and vice versa - so the check would be testing the wrong
+        # machine. It stays ON for real hosts, and tests/kernel-contract.sh
+        # proves it works by turning it on here with a key that no longer
+        # exists in any kernel.
+        kernel_sysctl_strict: false
+
+      hosts:
+        ktr-rhel:
+          ansible_host: lab-ktr-rhel
+          # A database host: transparent_hugepage=never and 1GB hugepages, both
+          # of which can ONLY be set at boot.
+          kernel_profile: database
+
+        ktr-ubuntu:
+          ansible_host: lab-ktr-ubuntu
+          # A high-throughput proxy: BBR, large socket buffers, and
+          # nf_conntrack's hash size - which can only be set as the module
+          # loads, never afterwards.
+          kernel_profile: throughput
+          # The throughput profile needs no boot arguments of its own, so this
+          # host adds one - which also exercises the _extra merge on layer 3 and
+          # shows the Debian drop-in doing real work.
+          #
+          # madvise rather than never: a proxy benefits from huge pages where an
+          # application asks for them explicitly with madvise(MADV_HUGEPAGE),
+          # and avoids the background compaction stalls that `always` causes for
+          # everything else. "never" is the database answer; "madvise" is the
+          # answer for a host running software you did not write.
+          kernel_cmdline_extra:
+            - transparent_hugepage=madvise
+
+        ktr-suse:
+          ansible_host: lab-ktr-suse
+          # SLES 15's system python3 is 3.6, which ansible-core cannot use as a
+          # target interpreter (every module dies on `from __future__ import
+          # annotations`). python311 is installed alongside it and pinned here.
+          # This is normal for a long-lived enterprise distribution: the old
+          # interpreter cannot be removed because the distribution's own tools
+          # need it, so the automation has to name the one it wants.
+          ansible_python_interpreter: /usr/bin/python3.11
+          # Latency-sensitive: isolated cores, no deep C-states. The profile
+          # with the most boot arguments, on the distribution where writing
+          # the file alone does nothing because there is no grubby.
+          kernel_profile: low-latency
+
+        ktr-amazon:
+          ansible_host: lab-ktr-amazon
+          # A Kubernetes node: the specific defaults that break at scale.
+          kernel_profile: container-host
+          # An extra key on top of the profile, to exercise the merge pattern:
+          # the profile's dict is not replaced, it is added to.
+          kernel_sysctl_extra:
+            net.ipv4.tcp_congestion_control: bbr

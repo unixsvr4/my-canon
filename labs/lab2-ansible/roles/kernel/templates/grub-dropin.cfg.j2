@@ -1,0 +1,50 @@
+{{ ansible_managed | comment }}
+# Profile: {{ kernel_profile }}   Host: {{ inventory_hostname }}
+#
+# /usr/sbin/grub-mkconfig sources /etc/default/grub and then every
+# /etc/default/grub.d/*.cfg in glob order, as SHELL. This file is 99-, so it is
+# read last and its assignment wins - including over the
+# 50-cloudimg-settings.cfg that every Ubuntu cloud image and AMI ships.
+#
+# It does not simply append. Appending is what makes a boot line end up with
+# "hugepages=8 hugepages=16" after someone changes the value: the kernel takes
+# the last occurrence for most parameters, so it appears to work until the day
+# it is a parameter the kernel reads first.
+#
+# Instead this snippet REMOVES every argument whose key the role manages from
+# whatever it inherited, then adds the role's current set. Delete an argument
+# from the profile and it disappears from the boot line on the next run, while
+# the distribution's own arguments (console=, crashkernel=, root=) are
+# untouched. The filtering runs at grub-mkconfig time, against the real
+# inherited value, so this file stays correct even if /etc/default/grub or an
+# earlier drop-in changes later.
+#
+# POSIX sh only: grub-mkconfig runs under /bin/sh, which is dash on Ubuntu.
+{% if kernel_cmdline_effective | length > 0 %}
+
+_canon_args="{{ kernel_cmdline_effective | join(' ') }}"
+_canon_keys=" {{ kernel_cmdline_effective | map('regex_replace', '=.*$', '') | join(' ') }} "
+_canon_kept=""
+
+for _canon_a in ${{ '{' }}{{ kernel_grub_cmdline_key }}:-}; do
+    _canon_k="${_canon_a%%=*}"
+    case "$_canon_keys" in
+        *" $_canon_k "*) continue ;;
+    esac
+    _canon_kept="$_canon_kept $_canon_a"
+done
+
+if [ -n "${_canon_kept# }" ]; then
+    {{ kernel_grub_cmdline_key }}="${_canon_kept# } $_canon_args"
+else
+    {{ kernel_grub_cmdline_key }}="$_canon_args"
+fi
+
+unset _canon_args _canon_keys _canon_kept _canon_a _canon_k
+{% else %}
+
+# This profile sets no boot arguments, so this file deliberately changes
+# nothing. It still exists so that REMOVING the last argument from a profile
+# removes it from the boot line, rather than leaving the previous version of
+# this file in place forever.
+{% endif %}

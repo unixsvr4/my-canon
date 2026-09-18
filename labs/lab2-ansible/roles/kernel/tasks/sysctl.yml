@@ -1,0 +1,47 @@
+---
+# =============================================================================
+# LAYER 1: runtime parameters, live now and on every boot.
+#
+# ONE FILE owns all of the role's keys, templated. Not ansible.posix.sysctl per
+# key, and the reason is removal: the sysctl module is idempotent per key, but
+# taking a key OUT of the variables leaves the old line on every host forever.
+# A single templated file is declarative as a whole - remove a key from the
+# profile and the next run removes the line.
+#
+# The file is named 90- so it sorts after the distribution's own drop-ins
+# (protect-links.conf, 50-default.conf, 99-cloudimg-ipv6.conf on Ubuntu) but
+# before a 99- file an operator might drop in to override it deliberately.
+# `sysctl --system` reads /run, /etc, /usr/lib and /usr/local in that order and
+# the LAST value for a key wins.
+# =============================================================================
+
+- name: Sysctl | Ensure the drop-in directory exists
+  ansible.builtin.file:
+    path: "{{ kernel_sysctl_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# NO `validate:` HERE, deliberately, and it is worth knowing why.
+#
+# The baseline role validates its sshd and sudoers writes with `sshd -t` and
+# `visudo -c`, because those tools have a parse-only mode. sysctl does not:
+# `sysctl -p <file>` PARSES AND APPLIES in one step, and there is no dry-run
+# flag. Using it as a validator would apply the values from a temporary file
+# before Ansible had decided to keep it - and would fail outright on a host
+# where /proc/sys is not writable.
+#
+# So the safety net is placed elsewhere: validate.yml checks every key against
+# /proc/sys before anything is written, and the template renders `key = value`
+# from a dict, which cannot produce a syntax error. Knowing which of your config
+# files can be checked by their own parser, and what to do about the ones that
+# cannot, is the difference between a habit and a practice.
+- name: Sysctl | Write the runtime parameters
+  ansible.builtin.template:
+    src: sysctl.conf.j2
+    dest: "{{ kernel_sysctl_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Kernel | load sysctl values

@@ -1,0 +1,42 @@
+---
+# =============================================================================
+# LAYER 2b: per-process resource limits.
+#
+# Persistent, and applied by PAM when a session or a service starts - which is
+# the catch worth knowing:
+#
+#   /etc/security/limits.d/*   applies to LOGIN SESSIONS (pam_limits), so a
+#                              process started by systemd does NOT get these.
+#   systemd units              get LimitNOFILE= from the unit, or the
+#                              DefaultLimitNOFILE= in /etc/systemd/system.conf.
+#
+# Setting nofile to a million in limits.d and then wondering why the database
+# service still has 1024 is a rite of passage. If the workload runs as a
+# systemd service, the unit (or a drop-in for it) is the place - and that
+# belongs to whichever role owns that service, not to this one. The role sets
+# the login-session limits and says so.
+# =============================================================================
+
+- name: Limits | Ensure the limits drop-in directory exists
+  ansible.builtin.file:
+    path: "{{ kernel_limits_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# One file again, for the same reason as the sysctl layer: removing an entry
+# from the profile has to remove the line, not leave it behind.
+#
+# Each entry is written as both `soft` and `hard`. A soft limit alone is the
+# default a process starts with and can raise itself up to the hard limit; a
+# hard limit alone changes nothing about what processes actually get. Writing
+# both is what makes the value take effect without the application having to
+# call setrlimit().
+- name: Limits | Write the resource limits
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: "{{ kernel_limits_file }}"
+    owner: root
+    group: root
+    mode: "0644"

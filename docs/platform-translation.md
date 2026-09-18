@@ -1,6 +1,6 @@
 # Platform translation
 
-The patterns in this repository are tool-agnostic. This page maps them onto platforms an infrastructure automation team commonly also runs.
+The patterns in this repository are tool-agnostic. This page maps them onto platforms an infrastructure automation team commonly also runs. AWS is not here because it is not a translation: it is implemented, in [`aws-platform.md`](aws-platform.md) and `labs/lab1-terraform/aws/`.
 
 ## Spacelift
 
@@ -42,6 +42,8 @@ The pattern for any second cloud: keep the **module interface** identical (input
 | Terraform `aws` provider | Terraform `alicloud` provider |
 
 Differences that can't be abstracted away: RAM's policy model, zonal VSwitch design, uneven regional service availability, and mainland-China requirements (separate accounts and endpoints, ICP filing). Ansible barely changes, because inside the instance it's the same Linux.
+
+The rule this page opens with — one interface, a per-platform implementation behind it — is also applied *within* Linux, to four distributions, by `labs/lab2-ansible/roles/kernel`. Same shape, smaller scale, and it is the cheapest place to practise the discipline: RHEL, Ubuntu, SUSE and Amazon Linux store kernel boot arguments in four different places, and the role's inputs do not change.
 
 ## VMware vSphere
 

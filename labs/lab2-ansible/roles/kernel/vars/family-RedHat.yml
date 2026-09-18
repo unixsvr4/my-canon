@@ -1,0 +1,46 @@
+---
+# =============================================================================
+# RHEL 9 family: RHEL, AlmaLinux, Rocky, CentOS Stream - and Amazon Linux 2023,
+# which reports os_family "RedHat" (see distro-Amazon.yml for what it adds).
+#
+# THE MECHANISM
+# RHEL 9 uses BLS (BootLoaderSpec): each installed kernel has its own entry in
+# /boot/loader/entries/<machine-id>-<version>.conf with an `options` line, and
+# grub reads those entries. grub.cfg no longer holds the kernel arguments.
+#
+# That means TWO places have to be updated, and this is the trap:
+#
+#   1. `grubby --update-kernel=ALL --args=...`  edits every EXISTING entry, so
+#      the change takes effect on the next reboot of the kernel you have now.
+#   2. GRUB_CMDLINE_LINUX in /etc/default/grub is what a NEWLY INSTALLED kernel
+#      inherits its arguments from.
+#
+# Do only (1) and the tuning silently disappears the next time the kernel is
+# updated - the host reboots into the new kernel with the distribution's
+# defaults, and the graphs change with no configuration change to blame. Do
+# only (2) and nothing happens until a kernel update. This role does both.
+#
+# grub2-mkconfig is NOT run here. With BLS the entries are authoritative, and
+# regenerating grub.cfg on a UEFI host writes to a different path than on a
+# BIOS host (/boot/efi/EFI/<distro>/grub.cfg vs /boot/grub2/grub.cfg) - a
+# distinction that has cost people a bootable system. grubby handles both.
+# =============================================================================
+
+# Edit the shell-style file in place: this family has no /etc/default/grub.d.
+kernel_bootloader_style: grub-file
+kernel_grub_file: /etc/default/grub
+kernel_grub_cmdline_key: GRUB_CMDLINE_LINUX
+
+# grubby updates the live BLS entries, so no generator has to run.
+kernel_use_grubby: true
+kernel_regenerate_cmd: ""
+
+kernel_sysctl_apply_cmd: sysctl --system
+kernel_sysctl_binary: /usr/sbin/sysctl
+
+# For the README table and the verify report.
+kernel_platform_note: >-
+  RHEL 9 / BLS: grubby rewrites the existing /boot/loader/entries, and
+  GRUB_CMDLINE_LINUX in /etc/default/grub is what the next installed kernel
+  inherits. Both are updated, because updating only one is how tuning
+  disappears after a kernel upgrade.

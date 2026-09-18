@@ -1,0 +1,10 @@
+{{ ansible_managed | comment }}
+# Applied by pam_limits at LOGIN. A systemd service does not read this file -
+# it takes LimitNOFILE= from its unit, or DefaultLimitNOFILE= in
+# /etc/systemd/system.conf. See tasks/limits.yml.
+#
+# <domain>  <type>  <item>  <value>
+{% for limit in kernel_limits_effective %}
+{{ "%-12s soft   %-10s %s" | format(limit.domain, limit.item, limit.value) }}
+{{ "%-12s hard   %-10s %s" | format(limit.domain, limit.item, limit.value) }}
+{% endfor %}

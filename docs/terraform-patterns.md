@@ -76,3 +76,25 @@ Terraform isn't transactional. Resources that succeeded are in state; one resour
 | integration tests (apply, read back, destroy) | `terraform test` with `command = apply`; Terratest in a sandbox account | 4 lifecycle runs: create, update one key, remove one key, replace; mutation-checked |
 | post-apply verification of a live environment | a smoke stage after every apply: describe calls, target health, a request through each endpoint | `verify-env.py`: exists, integrity, unmanaged, wiring, policy, outputs; proven by `tamper-env.sh` |
 | behaviour examples | `examples/*/demo.sh` | CI |
+
+## Testing a real provider without paying for it
+
+`mock_provider` (Terraform 1.7+) answers every provider call locally, so `command = apply` runs the whole graph with no credentials and no charges. That is what makes apply-time assertions — the ones that compare two computed values, which a plan cannot do — affordable on every commit rather than nightly. `labs/lab1-terraform/aws/` does it in 2.7 seconds for 22 runs.
+
+Be precise about the boundary. Mocks prove **your module's logic**: the graph resolves, every reference lands on its intended partner, the `for_each` keys are right, changing one instance leaves the others alone, and the guard rails reject what they should. They prove **nothing about the provider or the cloud**: a mock accepts an invalid subnet id, a name already taken in the account, a cpu/memory pair the API rejects, a policy that denies what the workload needs, or a quota you have already hit.
+
+So the pipeline needs all four gates, and they catch different things:
+
+| Gate | Catches |
+|---|---|
+| variable `validation` and `precondition` | bad input, in the pull request, per resource, with a message |
+| `tflint` with the provider ruleset | instance types that do not exist, deprecated arguments, names over an API limit |
+| `trivy` / `checkov` on the code | misconfiguration policy — encryption, public access, retention |
+| mocked `terraform test` | your module's wiring and isolation, including apply-time values |
+| a periodic apply into a sandbox account | everything above that is actually AWS's opinion |
+
+Three mock behaviours will cost an afternoon each if they are not known in advance, and all three are recorded in `RESEARCH.md` (T17–T19):
+
+1. **A mock invents a random string for every computed attribute, and the provider's schema validation still runs.** Anything ARN-typed or JSON-typed fails format validation — but only once a run is `command = apply`, because plan skips unknown values.
+2. **`mock_resource` defaults are per TYPE.** Defaulting a per-key resource's ARN gives every instance the same value and makes per-key assertions pass while proving nothing. Use `override_resource`, which is per address, for anything the module has more than one of.
+3. **A mock does not model force-replacement.** "Was this replaced?" is unanswerable; assert on a value Terraform computes (a digest of the rendered configuration) rather than one the provider assigns.

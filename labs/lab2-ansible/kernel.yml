@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# kernel.yml - apply reboot-persistent kernel tuning to a fleet.
+#
+#   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml
+#   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml --check --diff
+#   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml --tags kernel_bootloader
+#   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml -e kernel_reboot_ok=true
+#
+# Four hosts, four distributions, four different workload profiles, one role.
+# The playbook is deliberately short: every per-host difference is data in
+# inventory/kernel-hosts.yml, which is what makes the role reusable.
+#
+# serial is set for the same reason patch.yml sets it. These boot arguments
+# take effect on reboot, and a fleet-wide reboot is an outage however correct
+# the configuration is. One host at a time, and max_fail_percentage 0 stops the
+# run rather than marching on.
+# =============================================================================
+
+- name: Apply reboot-persistent kernel tuning
+  hosts: kernel_tuned
+  gather_facts: true
+  serial: 1
+  max_fail_percentage: 0
+
+  pre_tasks:
+    # The role needs no packages, but it does need a Python interpreter, and
+    # the four base images do not all ship a usable one. `raw` runs before any
+    # module, which is the only thing that works on a host with no Python at
+    # all - the standard bootstrap for a fresh image.
+    #
+    # It tests the EXACT interpreter this play will use, not "a python3". SLES
+    # 15 ships /usr/bin/python3 as 3.6.15, which ansible-core cannot run its
+    # modules on, so the inventory pins /usr/bin/python3.11 and this check has
+    # to follow the pin - otherwise it passes and every module afterwards dies
+    # with "SyntaxError: future feature annotations is not defined".
+    - name: Bootstrap | Ensure the target Python interpreter exists
+      ansible.builtin.raw: "test -x {{ kernel_interpreter }}"
+      vars:
+        kernel_interpreter: "{{ ansible_python_interpreter | default('/usr/bin/python3', true) }}"
+      register: kernel_python
+      changed_when: false
+      failed_when: false
+      # Read-only, so it runs in check mode too. Without this the task is
+      # skipped under --check, `kernel_python` has no `rc`, and the next task
+      # fails with "object of type 'dict' has no attribute 'rc'" - which turns
+      # every --check run, including the input-contract tests, into a failure
+      # for the wrong reason.
+      check_mode: false
+
+    - name: Bootstrap | Report a host without a usable interpreter
+      ansible.builtin.fail:
+        msg: >-
+          {{ ansible_python_interpreter | default('/usr/bin/python3', true) }}
+          is missing or not executable on {{ inventory_hostname }}.
+          setup-distros.sh installs it; on a real host the image build or
+          cloud-init does.
+      when: kernel_python.rc != 0
+
+  roles:
+    - role: kernel
+
+  post_tasks:
+    # One line per host at the end of the run, so a fleet-wide apply is
+    # readable without scrolling back through every task.
+    - name: Summary | What this host is running and what it is waiting for
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}
+          ({{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }},
+          {{ ansible_facts['os_family'] }})
+          profile={{ kernel_profile }}
+          sysctl_running={{ kernel_report.sysctl_ok | default('?') }}
+          sysctl_differs={{ kernel_report.sysctl_differs | default('?') }}
+          boot_args_active={{ kernel_report.cmdline_active | default('?') }}
+          boot_args_pending={{ kernel_report.cmdline_pending | default('?') }}
+          mechanism={{ kernel_bootloader_style | default('?') }}
+      when: kernel_report is defined

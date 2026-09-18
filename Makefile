@@ -21,13 +21,20 @@ TF_ROOTS    := $(LAB1)/modules/app_stack $(LAB1)/envs/dev $(LAB1)/envs/prod \
                $(LAB1)/examples/04-count-to-for-each-moved/v1 $(LAB1)/examples/04-count-to-for-each-moved/v2
 TF_EXAMPLES := 01-count-vs-for-each 02-for-each-shapes 03-nested-for-each 04-count-to-for-each-moved
 
+# The AWS roots are linted with the aws tflint ruleset (see aws/.tflint.hcl) and
+# tested with mock_provider, so they need no credentials and cost nothing.
+TF_AWS       := $(LAB1)/aws
+TF_AWS_ROOTS := $(TF_AWS)/modules/app_stack $(TF_AWS)/envs/dev $(TF_AWS)/envs/prod $(TF_AWS)/envs/bootstrap
+
 # Trace logging (if set in a shell profile) makes every Terraform call slow.
 unexport TF_LOG TF_LOG_PATH
 
 .PHONY: help ci all check test \
         lab1-static lab1-test tf-examples lab1-scan \
+        lab1-aws-static lab1-aws-test \
         lab1-up lab1-verify lab1-verify-demo lab1-down lab1-e2e \
         lab2-static lab2-up lab2-test lab2-idempotence-demo lab2-patch-demo lab2-drift-demo lab2-down \
+        lab2-distros-up lab2-kernel-test lab2-kernel-demo lab2-distros-down \
         lab3-static lab3-test lab3-artifacts clean
 
 help: ## List targets
@@ -35,11 +42,11 @@ help: ## List targets
 
 ci: check test ## Static checks + tests that need no Docker (what CI runs)
 
-all: ci lab1-e2e lab2-up lab2-test lab2-patch-demo lab3-artifacts ## Everything, including Docker-backed checks
+all: ci lab1-e2e lab2-up lab2-test lab2-patch-demo lab2-distros-up lab2-kernel-test lab3-artifacts ## Everything, including Docker-backed checks
 
-check: lab1-static lab1-scan lab2-static lab3-static ## All static checks
+check: lab1-static lab1-aws-static lab1-scan lab2-static lab3-static ## All static checks
 
-test: lab1-test tf-examples lab3-test ## All tests that need no Docker
+test: lab1-test lab1-aws-test tf-examples lab3-test ## All tests that need no Docker
 
 # --- Lab 1: Terraform ----------------------------------------------------------
 lab1-static: ## terraform fmt -check, init -backend=false, validate, tflint on every root
@@ -49,8 +56,19 @@ lab1-static: ## terraform fmt -check, init -backend=false, validate, tflint on e
 	  (cd $$d && terraform init -backend=false -input=false >/dev/null && terraform validate -no-color && tflint --no-color) || exit 1; \
 	done
 
-lab1-scan: ## trivy config scan of the Terraform code (misconfiguration gate)
+lab1-scan: ## trivy config scan of all Terraform, local and AWS (misconfiguration gate)
 	trivy config --quiet --exit-code 1 $(LAB1)
+
+lab1-aws-static: ## init/validate/tflint the AWS roots with the aws ruleset (no credentials needed)
+	tflint --init --config="$(CURDIR)/$(TF_AWS)/.tflint.hcl" >/dev/null
+	@for d in $(TF_AWS_ROOTS); do \
+	  echo "== $$d"; \
+	  (cd $$d && terraform init -backend=false -input=false >/dev/null && terraform validate -no-color && \
+	   tflint --no-color --config="$(CURDIR)/$(TF_AWS)/.tflint.hcl") || exit 1; \
+	done
+
+lab1-aws-test: ## terraform test on the AWS module: 18 plan runs + 4 apply runs against mock_provider
+	cd $(TF_AWS)/modules/app_stack && terraform init -backend=false -input=false >/dev/null && terraform test -no-color
 
 lab1-test: ## terraform test on the app_stack module (12 plan runs + 4 apply runs)
 	cd $(LAB1)/modules/app_stack && terraform init -backend=false -input=false >/dev/null && terraform test -no-color
@@ -96,8 +114,13 @@ lab2-static: ## ansible-lint (production profile) + syntax checks
 	cd $(LAB2) && { [ -d collections/ansible_collections/community/docker ] || \
 	  ansible-galaxy collection install -r requirements.yml -p ./collections >/dev/null; }
 	cd $(LAB2) && ansible-lint
-	cd $(LAB2) && for p in site.yml patch.yml examples/idempotence/idempotent.yml examples/idempotence/not-idempotent.yml; do \
+	cd $(LAB2) && for p in site.yml patch.yml kernel.yml examples/idempotence/idempotent.yml examples/idempotence/not-idempotent.yml; do \
 	  ansible-playbook --syntax-check $$p >/dev/null || exit 1; echo "syntax ok: $$p"; done
+	@# The EC2 dynamic inventory needs credentials to LIST hosts, but parsing it
+	@# needs only the collection - so CI can still prove the plugin is installed
+	@# and the config is valid YAML the plugin accepts.
+	cd $(LAB2) && ansible-inventory -i inventory/aws_ec2.yml --list >/dev/null 2>&1 && \
+	  echo "parse ok: inventory/aws_ec2.yml (aws_ec2 plugin, no credentials needed to parse)"
 
 lab2-up: ## Create the six lab containers and install pinned collections
 	cd $(LAB2) && ./setup.sh
@@ -127,6 +150,24 @@ lab2-patch-demo: ## Rolling patch: stops at web03; retry only the failures
 	cd $(LAB2) && if ansible-playbook patch.yml; then echo "ERROR: expected the run to abort at web03"; exit 1; fi
 	cd $(LAB2) && ansible-playbook patch.yml --limit @reports/patch.retry -e simulate_health_failure=false
 	cd $(LAB2) && ./summarize.sh
+
+lab2-distros-up: ## Create the four distribution containers for the kernel role
+	cd $(LAB2) && ./setup-distros.sh
+
+lab2-kernel-test: ## Kernel tuning on RHEL, Ubuntu, SUSE and Amazon Linux: artifacts, idempotence, input contract
+	cd $(LAB2) && tests/kernel-multidistro.sh
+	cd $(LAB2) && tests/kernel-contract.sh
+
+lab2-kernel-demo: ## Show what each distribution got, and what is still waiting for a reboot
+	cd $(LAB2) && ansible-playbook -i inventory/kernel-hosts.yml kernel.yml
+	@echo
+	@echo "== the bootloader mechanism each distribution uses"
+	@for h in ktr-rhel ktr-suse ktr-amazon; do \
+	  printf '%-12s ' "$$h"; docker exec lab-$$h grep -h '^GRUB_CMDLINE_LINUX' /etc/default/grub; done
+	@printf '%-12s ' ktr-ubuntu; docker exec lab-ktr-ubuntu grep -h '^_canon_args=' /etc/default/grub.d/99-canon-kernel.cfg
+
+lab2-distros-down: ## Remove the four distribution containers
+	cd $(LAB2) && ./setup-distros.sh --down
 
 lab2-down: ## Remove the lab containers
 	cd $(LAB2) && ./teardown.sh

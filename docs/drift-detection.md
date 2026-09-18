@@ -72,3 +72,21 @@ Prevention is cheaper than detection: humans get read-only console access in pro
 - Terraform: a scheduled plan per root (or Spacelift drift detection with optional reconciliation), and exit 2 opens a ticket linking the record.
 - Ansible: `drift-check.sh` per environment on a schedule; enforcement runs separately for security baselines.
 - Windows: `Test-DscConfiguration` provides the same signal natively for DSC-managed configuration.
+
+## A third layer: the kernel
+
+The two drift checks in this repository compare code with reality at the infrastructure layer (`terraform plan`) and the OS-configuration layer (`ansible-playbook --check`). Kernel tuning needs a third comparison, because a file being correct is not the same as the kernel running it, and neither of the first two can see the difference:
+
+| What is compared | By what | What it misses |
+|---|---|---|
+| state vs. the provider's view | `terraform plan -detailed-exitcode` | anything the provider does not read back (`RESEARCH.md` T13), and anything not in state |
+| the role's intent vs. the files | `ansible-playbook --check --diff` | a file that is right while the running configuration is not |
+| **desired vs. the RUNNING kernel** | `roles/kernel/tasks/verify.yml` reading `/proc/cmdline`, `/proc/sys`, `/sys` | nothing at this layer — but it needs three outcomes, not two |
+
+The three outcomes matter because collapsing them produces a check nobody trusts:
+
+- **active** — configured and running. Fine.
+- **pending** — configured, needs a reboot. A **report**: the automation did its job and the reboot is a scheduling decision. Treating this as a failure means a red check on every host between a tuning change and its maintenance window.
+- **differs** — loadable at runtime, written, loaded, and *still* not the running value. A **failure**: something later in sysctl's read order owns that key, and nobody knows it.
+
+The same distinction exists on AWS in a place people meet before they meet kernel tuning: an RDS parameter group. `apply_method = "immediate"` takes effect now; `pending-reboot` is written, accepted, and does nothing until the instance restarts. Setting a static parameter with `immediate` is accepted by Terraform *and* by the API, so `terraform apply` succeeds, the console shows the value as pending, and the database is still running the old one. It is the same shape as a boot argument, and it is why `labs/lab1-terraform/aws/modules/app_stack/database.tf` marks each parameter explicitly.

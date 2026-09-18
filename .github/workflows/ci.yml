@@ -2,15 +2,28 @@
 # CI - every job calls a Makefile target, so CI and a laptop run identical
 # commands. Tool versions match the versions the labs were verified with.
 #
-#   static-and-unit   make ci lab1-e2e    no Docker: fmt, validate, tflint, trivy,
-#                                         terraform test (plan + apply), for_each demos,
-#                                         ansible-lint, syntax, lab 3 unit tests;
+#   static-and-unit   make ci lab1-e2e    no Docker and NO CLOUD ACCOUNT: fmt, validate,
+#                                         tflint (including the aws ruleset), trivy,
+#                                         38 terraform test runs - 16 local and 22 AWS
+#                                         against mock_provider - for_each demos,
+#                                         ansible-lint, syntax, 39 lab 3 unit tests;
 #                                         then apply, verify, tamper, remediate and
-#                                         destroy both Terraform environments
-#   ansible           make lab2-up lab2-test
+#                                         destroy both local Terraform environments
+#   ansible           make lab2-up lab2-test lab2-patch-demo
 #                                         real containers: converge, idempotence,
-#                                         input contract, anti-pattern demo, drift cycle
-#   bare-metal        make lab3-artifacts dhcpd -t and ksvalidator on rendered files
+#                                         input contract, anti-pattern demo, drift cycle,
+#                                         rolling patch
+#   kernel            make lab2-distros-up lab2-kernel-test
+#                                         four distributions (AlmaLinux 9, Ubuntu 24.04,
+#                                         SLES 15, Amazon Linux 2023): each one's own
+#                                         boot-argument mechanism, idempotence, and the
+#                                         input contract and merge behaviour
+#   bare-metal        make lab3-artifacts dhcpd -t, ksvalidator and cloud-init schema on
+#                                         the rendered files
+#
+# No job needs AWS credentials. The AWS Terraform is validated, linted, scanned and
+# apply-tested against mocks; `terraform apply` against a real account is deliberately
+# not run anywhere (see docs/aws-platform.md for what is exercised and what is not).
 # =============================================================================
 name: ci
 
@@ -56,6 +69,8 @@ jobs:
       - name: Install Ansible tooling
         run: pip install "ansible-core==${ANSIBLE_CORE_VERSION}" "ansible-lint==${ANSIBLE_LINT_VERSION}" pyyaml
 
+      # `tflint --init` for the aws ruleset is inside the lab1-aws-static target,
+      # so CI needs no extra step for it and a laptop gets the same behaviour.
       - name: make ci
         run: make ci
 
@@ -84,11 +99,32 @@ jobs:
       - name: Rolling patch demo
         run: make lab2-patch-demo
 
+  kernel:
+    runs-on: ubuntu-latest
+    needs: static-and-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: pip install "ansible-core==${ANSIBLE_CORE_VERSION}"
+
+      # Four distributions, pulled from public registries - no subscription and
+      # no credentials. The SUSE image is SUSE's own BCI base.
+      - name: Create the four distribution hosts
+        run: make lab2-distros-up
+
+      - name: Kernel tuning on four distributions, plus the input contract
+        run: make lab2-kernel-test
+
   bare-metal:
     runs-on: ubuntu-latest
     needs: static-and-unit
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate rendered DHCP and kickstart files with the real parsers
+      - name: Validate rendered DHCP, kickstart and cloud-init files with the real parsers
         run: make lab3-artifacts
