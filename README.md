@@ -117,7 +117,7 @@ Every directory has a README explaining its part in detail.
 
 Every quoted result in the READMEs (command output, resource counts, exit codes, test totals) was produced by running the command next to it. `make all` re-runs the automated ones. [`RESEARCH.md`](RESEARCH.md) records the tool versions, the sources, and each bug found while building this, with how it was found and fixed.
 
-The CI workflow calls the same `make` targets that were run locally, and has run green on GitHub-hosted runners.
+The CI workflow calls the same `make` targets that were run locally. Its `static-and-unit`, `ansible` and `bare-metal` jobs have run green on GitHub-hosted runners; the `kernel` job is new and has only been run locally, so treat its first GitHub run as the check on runner-specific details — it pulls images from three registries, including SUSE's.
 
 Two things are deliberately **not** run by any target, and are described rather than exercised: `terraform apply` against a real AWS account (it costs money — the [cost table](labs/lab1-terraform/aws/README.md#cost-honestly) says how much), and the AWS dynamic inventory and Session Manager connection returning real hosts (they need credentials). [`docs/aws-platform.md`](docs/aws-platform.md) has the full list of what is exercised and what is reviewed.
 
