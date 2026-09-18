@@ -50,3 +50,36 @@ kernel_platform_note: >-
 
 # Verified present on amazonlinux:2023.
 kernel_sysctl_binary: /usr/sbin/sysctl
+
+# =============================================================================
+# AL2023 USES A DIFFERENT KEY FROM RHEL 9, AND grubby CLOBBERS THE OTHER ONE.
+#
+# Both facts were found on a real AL2023 instance, and neither is visible in a
+# container:
+#
+#   1. AL2023 ships its kernel arguments in GRUB_CMDLINE_LINUX_DEFAULT
+#      ("console=ttyS0,115200n8 ... selinux=1 quiet") and leaves
+#      GRUB_CMDLINE_LINUX empty. RHEL 9 and AlmaLinux do the opposite: they
+#      populate GRUB_CMDLINE_LINUX and have no _DEFAULT line at all. So the
+#      key a future kernel inherits from is not the same key on the two
+#      members of one family.
+#
+#   2. `grubby --update-kernel=ALL --remove-args=...` on AL2023 BLANKS
+#      GRUB_CMDLINE_LINUX entirely - not just the named keys. Measured:
+#
+#        after our write:      GRUB_CMDLINE_LINUX="probe_marker=1"
+#        after grubby remove:  GRUB_CMDLINE_LINUX=""
+#
+#      On AlmaLinux 9 the same command leaves the line untouched, and
+#      GRUB_CMDLINE_LINUX_DEFAULT survives on AL2023.
+#
+# Taken together: writing GRUB_CMDLINE_LINUX on AL2023 put the arguments in the
+# variable the distribution does not use, and then the role's OWN next task
+# wiped it - so the file churned on every run and the future-kernel protection
+# was never really there. Targeting _DEFAULT fixes both at once.
+#
+# The BLS entries were always correct, which is why the reboot test passed
+# while this was broken: grubby had done its half. The half that matters after
+# a `dnf update kernel` is the one that was quietly being erased.
+# =============================================================================
+kernel_grub_cmdline_key: GRUB_CMDLINE_LINUX_DEFAULT

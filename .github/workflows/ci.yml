@@ -21,6 +21,15 @@
 #   bare-metal        make lab3-artifacts dhcpd -t, ksvalidator and cloud-init schema on
 #                                         the rendered files
 #
+# Two things are deliberately NOT jobs here, because a commit gate should be
+# fast and free:
+#   * lab2-vms-up / lab2-kernel-reboot - four QEMU virtual machines, two reboots
+#     and a kernel upgrade each, about 15 minutes. It is the only way to test
+#     that the boot arguments take effect, and it has been run locally; nested
+#     virtualisation on a hosted runner would fall back to emulation and take
+#     far longer.
+#   * labs/lab2-ansible/aws - four EC2 instances. It creates billable resources.
+#
 # No job needs AWS credentials. The AWS Terraform is validated, linted, scanned and
 # apply-tested against mocks; `terraform apply` against a real account is deliberately
 # not run anywhere (see docs/aws-platform.md for what is exercised and what is not).

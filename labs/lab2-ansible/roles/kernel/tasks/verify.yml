@@ -9,88 +9,25 @@
 #     drop-in overrides the key)
 #   - a boot argument written to the bootloader and not yet booted into
 #   - a module option written while the module is already loaded with the old one
+#   - a hugepage request the kernel accepted and could not satisfy
 #
 # "terraform apply succeeded" and "the environment is correct" are two
 # different claims - the same reason lab 1 has verify-env.py. Here the two
 # claims are "the files are right" and "the kernel is running it".
 #
-# The report distinguishes three outcomes, and only one of them is a failure:
+# Four outcomes, and only two of them are failures:
 #
 #   active    configured and running now                   -> fine
 #   PENDING   configured, needs a reboot to take effect    -> report (a
 #             scheduling decision, not an error)
 #   DIFFERS   configured, loadable at runtime, NOT loaded  -> FAILURE, because
 #             something silently overrode it
+#   SHORT     boot argument active, kernel could not honour it -> FAILURE,
+#             because the workload gets none of what was asked for
 # =============================================================================
 
-- name: Verify | Compare the running kernel with the desired state
-  ansible.builtin.shell:
-    cmd: |
-      set -o pipefail
-      cmdline_active=0
-      cmdline_pending=0
-      sysctl_ok=0
-      sysctl_differs=0
-      sysctl_absent=0
-
-      running=" $(tr -d '\n' < /proc/cmdline) "
-      {% for arg in kernel_cmdline_effective %}
-      case "$running" in
-        *" {{ arg }} "*) printf 'CMDLINE  active   %s\n' '{{ arg }}'; cmdline_active=$((cmdline_active+1)) ;;
-        *)               printf 'CMDLINE  PENDING  %s  (reboot required)\n' '{{ arg }}'; cmdline_pending=$((cmdline_pending+1)) ;;
-      esac
-      {% endfor %}
-
-      while IFS='|' read -r key want; do
-        [ -n "$key" ] || continue
-        path="/proc/sys/$(printf '%s' "$key" | tr '.' '/')"
-        if [ ! -e "$path" ]; then
-          printf 'SYSCTL   ABSENT   %s  (not in this kernel)\n' "$key"
-          sysctl_absent=$((sysctl_absent+1))
-          continue
-        fi
-        # /proc/sys values can be tab-separated (tcp_rmem, ip_local_port_range),
-        # so both sides are normalised to single spaces before comparing.
-        have=$(tr -s '[:space:]' ' ' < "$path" | sed 's/^ *//; s/ *$//')
-        wanted=$(printf '%s' "$want" | tr -s '[:space:]' ' ' | sed 's/^ *//; s/ *$//')
-        if [ "$have" = "$wanted" ]; then
-          printf 'SYSCTL   ok       %s = %s\n' "$key" "$have"
-          sysctl_ok=$((sysctl_ok+1))
-        else
-          printf 'SYSCTL   DIFFERS  %s  want=%s running=%s\n' "$key" "$wanted" "$have"
-          sysctl_differs=$((sysctl_differs+1))
-        fi
-      done <<'PAIRS'
-      {% for key, value in kernel_sysctl_effective | dictsort %}
-      {{ key }}|{{ value }}
-      {% endfor %}
-      PAIRS
-
-      # Transparent huge pages have no sysctl, so they are checked where the
-      # kernel actually exposes them. This is the setting most often believed
-      # to be applied when it is not.
-      if [ -r /sys/kernel/mm/transparent_hugepage/enabled ]; then
-        printf 'THP      state    %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/enabled)"
-      fi
-
-      printf 'SUMMARY cmdline_active=%d cmdline_pending=%d sysctl_ok=%d sysctl_differs=%d sysctl_absent=%d\n' \
-        "$cmdline_active" "$cmdline_pending" "$sysctl_ok" "$sysctl_differs" "$sysctl_absent"
-    executable: /bin/bash
-  register: kernel_state
-  changed_when: false
-  check_mode: false
-
-- name: Verify | Parse the summary
-  ansible.builtin.set_fact:
-    kernel_report: >-
-      {{ dict(
-           kernel_state.stdout_lines
-           | select('match', '^SUMMARY ')
-           | first
-           | regex_replace('^SUMMARY ', '')
-           | split(' ')
-           | map('split', '=')
-         ) }}
+- name: Verify | Read the running kernel state
+  ansible.builtin.include_tasks: verify-collect.yml
 
 - name: Verify | The running kernel and the desired state
   ansible.builtin.debug:
@@ -116,6 +53,56 @@
     quiet: true
   when: kernel_sysctl_apply | bool
 
+# --- The reboot, only when explicitly allowed ---------------------------------
+#
+# Then the state is collected AGAIN, so everything below - and the play's own
+# summary - describes the kernel that is running now rather than the one that
+# was running before the reboot.
+- name: Verify | Reboot to activate the boot arguments
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ kernel_reboot_timeout }}"
+    msg: "Rebooting to activate kernel boot arguments (kernel role)"
+  register: kernel_reboot
+  when:
+    - kernel_reboot_ok | bool
+    - kernel_report.cmdline_pending | int > 0
+
+- name: Verify | Re-read the running kernel state after the reboot
+  ansible.builtin.include_tasks: verify-collect.yml
+  when:
+    - kernel_reboot_ok | bool
+    - kernel_reboot is changed
+
+- name: Verify | The running kernel after the reboot
+  ansible.builtin.debug:
+    msg: "{{ kernel_state.stdout_lines | reject('match', '^SUMMARY ') | list }}"
+  when:
+    - kernel_reboot_ok | bool
+    - kernel_reboot is changed
+
+# The check that catches a bootloader edit that looked fine and did not take -
+# the wrong grub.cfg path, a drop-in that sorted earlier than expected, or a
+# platform that supplies its own command line. Without it, "we rebooted" is
+# assumed to mean "it is active now".
+- name: Verify | The reboot really activated every boot argument
+  ansible.builtin.assert:
+    that:
+      - kernel_report.cmdline_pending | int == 0
+    fail_msg: >-
+      After rebooting, {{ kernel_report.cmdline_pending }} of
+      {{ kernel_cmdline_effective | length }} boot argument(s) are STILL not in
+      /proc/cmdline. The bootloader configuration was written but is not what
+      this host booted from. On the RHEL family check `grubby --info=DEFAULT`;
+      on Debian check that {{ kernel_grub_dropin | basename }} sorts last in
+      /etc/default/grub.d; on SUSE check that grub2-mkconfig wrote the grub.cfg
+      the firmware actually reads.
+    success_msg: >-
+      all {{ kernel_report.cmdline_active }} boot argument(s) active after the reboot
+    quiet: true
+  when:
+    - kernel_reboot_ok | bool
+    - kernel_reboot is changed
+
 - name: Verify | Report boot arguments that need a reboot
   ansible.builtin.debug:
     msg: >-
@@ -139,50 +126,20 @@
     quiet: true
   when: kernel_fail_on_reboot_required | bool
 
-# --- The reboot, only when explicitly allowed ---------------------------------
-- name: Verify | Reboot to activate the boot arguments
-  ansible.builtin.reboot:
-    reboot_timeout: "{{ kernel_reboot_timeout }}"
-    msg: "Rebooting to activate kernel boot arguments (kernel role)"
-  when:
-    - kernel_reboot_ok | bool
-    - kernel_report.cmdline_pending | int > 0
-
-- name: Verify | Confirm the boot arguments are active after the reboot
-  ansible.builtin.shell:
-    cmd: |
-      set -o pipefail
-      running=" $(tr -d '\n' < /proc/cmdline) "
-      missing=""
-      {% for arg in kernel_cmdline_effective %}
-      case "$running" in *" {{ arg }} "*) ;; *) missing="$missing {{ arg }}" ;; esac
-      {% endfor %}
-      printf '%s' "${missing# }"
-    executable: /bin/bash
-  register: kernel_post_reboot
-  changed_when: false
-  when:
-    - kernel_reboot_ok | bool
-    - kernel_report.cmdline_pending | int > 0
-
-# The check that catches a bootloader edit that looked fine and did not take -
-# the wrong grub.cfg path, a drop-in that sorted earlier than expected, or a
-# platform that supplies its own command line. Without it, "we rebooted" is
-# assumed to mean "it is active now".
-- name: Verify | The reboot really activated them
+# An argument the kernel accepted but could not act on. `hugepages=N` is a
+# request: the kernel reserves what it can find contiguously at boot and
+# silently continues with less. /proc/cmdline still shows the argument, so a
+# check that stops at "is it active?" reports success while the workload gets
+# small pages.
+- name: Verify | Huge pages were actually reserved, not just requested
   ansible.builtin.assert:
     that:
-      - kernel_post_reboot.stdout | length == 0
+      - kernel_report.hugepage_short | default(0) | int == 0
     fail_msg: >-
-      After rebooting, these arguments are STILL not in /proc/cmdline:
-      {{ kernel_post_reboot.stdout }}.
-      The bootloader configuration was written but is not what this host booted
-      from. On the RHEL family check `grubby --info=DEFAULT`; on Debian check
-      that {{ kernel_grub_dropin | basename }} sorts last in
-      /etc/default/grub.d; on SUSE check that grub2-mkconfig wrote the grub.cfg
-      the firmware actually reads.
-    success_msg: "all {{ kernel_cmdline_effective | length }} boot argument(s) active"
+      A hugepage reservation fell short - see the HUGEPAGE line in the report
+      above. The boot argument is active and the kernel could not find that
+      much contiguous memory, so the workload gets none of what was asked for.
+      Lower kernel_hugepages_1g, or give the host more memory.
+    success_msg: "hugepage reservations satisfied"
     quiet: true
-  when:
-    - kernel_reboot_ok | bool
-    - kernel_post_reboot is not skipped
+  when: kernel_report.hugepage_short is defined

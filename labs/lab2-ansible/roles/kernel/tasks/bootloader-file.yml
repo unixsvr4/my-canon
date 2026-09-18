@@ -134,8 +134,34 @@
 # `dnf update kernel`, then silently reverts - with no configuration change to
 # point at.
 #
+# CAUTION, measured on Amazon Linux 2023: `grubby --remove-args` also BLANKS
+# GRUB_CMDLINE_LINUX in /etc/default/grub - the whole variable, not just the
+# named keys. That is why vars/distro-Amazon.yml points this family member at
+# GRUB_CMDLINE_LINUX_DEFAULT, which grubby leaves alone and which is the key
+# AL2023 actually populates. On AlmaLinux 9 neither is true.
+- name: Bootloader | Read the default boot entry's current arguments
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      grubby --info=DEFAULT | sed -n 's/^args="\(.*\)"$/\1/p'
+    executable: /bin/bash
+  register: kernel_grubby_before
+  changed_when: false
+  check_mode: false
+  when:
+    - kernel_use_grubby | bool
+    - kernel_cmdline_effective | length > 0
+    - "'grubby' in kernel_boot_tools.stdout.split()"
+
 # --remove-args first, then --args: grubby appends, so without the removal a
 # changed value would appear twice on the entry's options line.
+#
+# changed_when compares the entry's argument SET before and after, rather than
+# reporting `true` unconditionally as the first version did. That made the role
+# report "changed" on every single run on the whole RHEL family - which is the
+# exact anti-pattern examples/idempotence/ exists to demonstrate, and it hid
+# the runs that really did change something. Sorted token lists, because
+# grubby is free to reorder what it writes.
 - name: Bootloader | Update the existing boot entries with grubby
   ansible.builtin.shell:
     cmd: |
@@ -145,7 +171,9 @@
       grubby --info=DEFAULT | sed -n 's/^args="\(.*\)"$/\1/p'
     executable: /bin/bash
   register: kernel_grubby
-  changed_when: true
+  changed_when: >-
+    (kernel_grubby.stdout | default('') | split | sort)
+    != (kernel_grubby_before.stdout | default('') | split | sort)
   when:
     - kernel_use_grubby | bool
     - kernel_cmdline_effective | length > 0

@@ -15,6 +15,83 @@
 # the LAST value for a key wins.
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# THE CHECK THAT EARNS ITS KEEP - and it runs HERE, not in validate.yml.
+#
+# It was in validate.yml first, which runs before modules.yml, and it failed on
+# the throughput host with "net.netfilter.nf_conntrack_max is not present in
+# this kernel" - because nf_conntrack had not been loaded YET. The ordering
+# comment in main.yml says modules must come before sysctls for exactly that
+# reason; the check enforcing it was itself running too early (RESEARCH.md A27).
+#
+# A sysctl key that the running kernel does not implement is, depending on the
+# distribution and the version, either silently skipped by `sysctl --system` or
+# a hard error that aborts the rest of the file - which means the keys AFTER it
+# are never applied either. Both outcomes are worse than refusing to write it.
+#
+# Three reasons a key is missing, all of them real:
+#   - removed from the kernel:   net.ipv4.tcp_tw_recycle, gone in 4.12, still
+#                                copied from tuning guides written in 2012
+#   - needs a build option:      kernel.sched_migration_cost_ns requires
+#                                CONFIG_SCHED_DEBUG, absent on some kernels
+#   - its module is not loaded:  net.netfilter.nf_conntrack_max does not exist
+#                                until nf_conntrack is, which is why modules.yml
+#                                runs before sysctl.yml
+#
+# /proc/sys mirrors the key namespace as a directory tree, so the check is a
+# path test - no sysctl binary needed, which also means it works on a host
+# where procps is not installed yet.
+# ---------------------------------------------------------------------------
+# /bin/bash, not /bin/sh, and it is a portability decision rather than a habit:
+# /bin/sh is dash on Debian and Ubuntu, dash has no `set -o pipefail`, and the
+# repository's ansible-lint profile requires pipefail on any shell task
+# containing a pipeline (risky-shell-pipe). All four target distributions ship
+# bash, so bash is the portable choice here - the opposite of the usual advice,
+# for a specific reason.
+#
+# The one place that must stay POSIX sh is templates/grub-dropin.cfg.j2, because
+# grub-mkconfig sources it with /bin/sh.
+- name: Sysctl | Find configured keys the running kernel does not have
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      missing=""
+      for key in {{ kernel_sysctl_effective.keys() | join(' ') }}; do
+        path="/proc/sys/$(printf '%s' "$key" | tr '.' '/')"
+        [ -e "$path" ] || missing="$missing $key"
+      done
+      printf '%s' "${missing# }"
+    executable: /bin/bash
+  register: kernel_missing_keys
+  changed_when: false
+  check_mode: false
+
+- name: Sysctl | Every configured key exists in the running kernel
+  ansible.builtin.assert:
+    that:
+      - kernel_missing_keys.stdout | length == 0
+    fail_msg: >-
+      These keys are not present in this kernel's /proc/sys:
+      {{ kernel_missing_keys.stdout }}.
+      Either the key was removed from the kernel, or this kernel was built
+      without the option that provides it, or the module that provides it is
+      not loaded (add it to kernel_modules_extra). Writing it anyway would make
+      `sysctl --system` skip or abort the whole file.
+      Set kernel_sysctl_strict=false to write it regardless.
+    success_msg: >-
+      {{ kernel_sysctl_effective | length }} sysctl key(s) present in this kernel
+    quiet: true
+  when: kernel_sysctl_strict | bool
+
+- name: Sysctl | Report keys that will be written but are not in this kernel
+  ansible.builtin.debug:
+    msg: >-
+      NOT IN THIS KERNEL (kernel_sysctl_strict is false, writing anyway):
+      {{ kernel_missing_keys.stdout }}
+  when:
+    - not (kernel_sysctl_strict | bool)
+    - kernel_missing_keys.stdout | length > 0
+
 - name: Sysctl | Ensure the drop-in directory exists
   ansible.builtin.file:
     path: "{{ kernel_sysctl_file | dirname }}"

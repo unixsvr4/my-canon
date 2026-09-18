@@ -1,0 +1,107 @@
+---
+# =============================================================================
+# Collect the RUNNING kernel state and parse it into kernel_report.
+#
+# In its own file because it runs TWICE: once before any reboot, and again
+# afterwards. The first version of verify.yml collected once and then rebooted,
+# so the summary it printed was the PRE-reboot state - it said
+# "boot_args_pending=4" about a host that had just come back up with all four
+# active. Reporting a stale number after doing the work is worse than not
+# reporting one (RESEARCH.md A28).
+# =============================================================================
+- name: Verify | Compare the running kernel with the desired state
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      cmdline_active=0
+      cmdline_pending=0
+      sysctl_ok=0
+      sysctl_differs=0
+      sysctl_absent=0
+      hugepage_short=0
+
+      running=" $(tr -d '\n' < /proc/cmdline) "
+      {% for arg in kernel_cmdline_effective %}
+      case "$running" in
+        *" {{ arg }} "*) printf 'CMDLINE  active   %s\n' '{{ arg }}'; cmdline_active=$((cmdline_active+1)) ;;
+        *)               printf 'CMDLINE  PENDING  %s  (reboot required)\n' '{{ arg }}'; cmdline_pending=$((cmdline_pending+1)) ;;
+      esac
+      {% endfor %}
+
+      while IFS='|' read -r key want; do
+        [ -n "$key" ] || continue
+        path="/proc/sys/$(printf '%s' "$key" | tr '.' '/')"
+        if [ ! -e "$path" ]; then
+          printf 'SYSCTL   ABSENT   %s  (not in this kernel)\n' "$key"
+          sysctl_absent=$((sysctl_absent+1))
+          continue
+        fi
+        # /proc/sys values can be tab-separated (tcp_rmem, ip_local_port_range),
+        # so both sides are normalised to single spaces before comparing.
+        have=$(tr -s '[:space:]' ' ' < "$path" | sed 's/^ *//; s/ *$//')
+        wanted=$(printf '%s' "$want" | tr -s '[:space:]' ' ' | sed 's/^ *//; s/ *$//')
+        if [ "$have" = "$wanted" ]; then
+          printf 'SYSCTL   ok       %s = %s\n' "$key" "$have"
+          sysctl_ok=$((sysctl_ok+1))
+        else
+          printf 'SYSCTL   DIFFERS  %s  want=%s running=%s\n' "$key" "$wanted" "$have"
+          sysctl_differs=$((sysctl_differs+1))
+        fi
+      done <<'PAIRS'
+      {% for key, value in kernel_sysctl_effective | dictsort %}
+      {{ key }}|{{ value }}
+      {% endfor %}
+      PAIRS
+
+      # Transparent huge pages have no sysctl, so they are checked where the
+      # kernel actually exposes them. This is the setting most often believed
+      # to be applied when it is not.
+      if [ -r /sys/kernel/mm/transparent_hugepage/enabled ]; then
+        printf 'THP      state    %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+      fi
+
+      # HUGE PAGES: an active boot argument is not a reservation.
+      #
+      # `hugepages=N` on the command line is a REQUEST. The kernel honours it
+      # only if it can find that much contiguous memory at boot, and when it
+      # cannot it says so once in dmesg and carries on with fewer - or none.
+      # /proc/cmdline still shows the argument, so every check that stops at
+      # "is the argument active?" reports success while the database gets
+      # small pages. This was found by rebooting a 2GB guest that had asked
+      # for one 1GB page and getting zero.
+      for want in $(tr ' ' '\n' < /proc/cmdline | sed -n 's/^hugepages=//p'); do
+        [ "$want" -gt 0 ] 2>/dev/null || continue
+        size=$(tr ' ' '\n' < /proc/cmdline | sed -n 's/^default_hugepagesz=//p' | tail -1)
+        case "$size" in
+          1G) dir=/sys/kernel/mm/hugepages/hugepages-1048576kB ;;
+          2M) dir=/sys/kernel/mm/hugepages/hugepages-2048kB ;;
+          *)  dir="" ;;
+        esac
+        [ -n "$dir" ] && [ -r "$dir/nr_hugepages" ] || continue
+        got=$(cat "$dir/nr_hugepages")
+        if [ "$got" -ge "$want" ]; then
+          printf 'HUGEPAGE ok       %s: %s of %s reserved\n' "$size" "$got" "$want"
+        else
+          printf 'HUGEPAGE SHORT    %s: %s of %s reserved (not enough contiguous memory at boot)\n' "$size" "$got" "$want"
+          hugepage_short=$((hugepage_short+1))
+        fi
+      done
+
+      printf 'SUMMARY cmdline_active=%d cmdline_pending=%d sysctl_ok=%d sysctl_differs=%d sysctl_absent=%d hugepage_short=%d\n' \
+        "$cmdline_active" "$cmdline_pending" "$sysctl_ok" "$sysctl_differs" "$sysctl_absent" "$hugepage_short"
+    executable: /bin/bash
+  register: kernel_state
+  changed_when: false
+  check_mode: false
+
+- name: Verify | Parse the summary
+  ansible.builtin.set_fact:
+    kernel_report: >-
+      {{ dict(
+           kernel_state.stdout_lines
+           | select('match', '^SUMMARY ')
+           | first
+           | regex_replace('^SUMMARY ', '')
+           | split(' ')
+           | map('split', '=')
+         ) }}

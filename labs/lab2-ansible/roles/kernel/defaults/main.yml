@@ -44,6 +44,30 @@ kernel_modules_extra: []
 kernel_module_options_extra: {}
 kernel_limits_extra: []
 
+# --- Machine-dependent values the profiles use --------------------------------
+#
+# A profile with a CPU range or a hugepage count baked into it fits exactly one
+# machine, which is not a profile. These three are the numbers that genuinely
+# have to change per host class, so they are inputs with production defaults -
+# and the same low-latency profile then fits a 96-core trading host and a
+# 2-vCPU test VM.
+#
+# Which cores to hand to the workload: isolcpus, nohz_full and rcu_nocbs must
+# all name the SAME set, and at least one core (plus ideally one per socket)
+# has to be left out for the kernel's own housekeeping.
+kernel_isolated_cpus: "2-7"
+
+# How many 1GB huge pages to reserve at boot for the database profile. They can
+# only be reserved at boot (see the profile), and reserving more than the host
+# has leaves you with none at all.
+kernel_hugepages_1g: 8
+
+# idle=poll never lets an isolated core sleep, which removes C-state exit
+# latency and roughly doubles that core's idle power draw. On a latency host
+# that is the trade you are making deliberately; here it is an explicit opt-in
+# rather than a hidden cost of choosing the profile.
+kernel_idle_poll: true
+
 # --- Layer 1: runtime parameters ----------------------------------------------
 kernel_sysctl_file: /etc/sysctl.d/90-canon-kernel.conf
 

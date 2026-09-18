@@ -8,3 +8,18 @@ drift.log
 drift-history/
 .drift-run.json
 .drift-run.err
+
+# Terraform working files for the EC2 kernel rig in aws/. Lab 2 had no
+# Terraform until that rig existed, so this section is new - and without it the
+# 600MB provider binary under .terraform/ is staged by `git add -A`.
+#
+# aws/.terraform.lock.hcl is NOT ignored: aws/ is a ROOT, and roots commit
+# their lock file to pin the provider build, same as lab 1's environment roots.
+aws/.terraform/
+aws/terraform.tfstate*
+aws/*.tfplan
+aws/tfplan
+
+# The VM lab keeps everything in $VM_DIR (default /tmp/canon-kernel-vms), so
+# there is nothing to ignore for it - listed here so the next person does not
+# go looking for where the disk images went.

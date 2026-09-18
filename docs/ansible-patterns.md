@@ -128,3 +128,21 @@ Two examples in this repository, and the pattern is worth applying to anything w
 
 - `sshd -T` after writing a drop-in, because sshd takes the **first** value it reads and a vendor file can sort earlier (A1).
 - `/proc/cmdline`, `/proc/sys` and `/sys` after kernel tuning, because a file can be correct while the running kernel is not — and the three outcomes are different: **active** is fine, **pending a reboot** is a scheduling decision, and **written, loaded, and still not the running value** is a failure, because something later in the read order owns that key.
+
+## Testing layers, and what each one cannot do
+
+Four rungs, cheapest first. The rule is that each rung tests something the one below it **cannot**, otherwise it is not worth its runtime:
+
+| Rung | Tests | Blind to |
+|---|---|---|
+| `ansible-lint` (production profile) | style, FQCNs, naming, the shapes that correlate with bugs | whether anything works |
+| **containers** | the right file, in the right place, on several distributions; idempotence; the input contract | anything about a kernel, a reboot, or a service manager — a container has neither its own kernel nor systemd |
+| **virtual machines** | that the configuration takes EFFECT: a boot argument in `/proc/cmdline`, a reload on boot, a reboot survived, a kernel upgrade lived through | the platform's own quirks — an AMI's existing boot arguments, a hypervisor reboot, cloud-init's ordering |
+| **the real platform** (EC2, vSphere, hardware) | all of it | nothing, and it costs money and time, so it runs periodically rather than per commit |
+
+The `kernel` role is the worked example, and the numbers make the argument: the container rung runs in 40 seconds and catches the file mechanics on four distributions; the VM rung takes 15 minutes and caught **six** bugs the container rung structurally could not, including a role that reported `changed` on every single run of an entire distribution family (`RESEARCH.md` A30) and one that wrote its settings into a variable the distribution ignores and then erased them (A31).
+
+Two lessons that generalise beyond kernels:
+
+- **A container's accommodations are not free.** `kernel_sysctl_apply: false` and `kernel_sysctl_strict: false` are correct for a container and they switch off exactly the checks that would have caught A27. Write them down as accommodations, keep the defaults honest, and make sure some rung runs with them ON.
+- **"It answered" is not "it is ready."** cloud-init starts sshd and *then* runs its final stage, so a play can start while the interpreter it needs is still installing — and if that install fails, cloud-init cheerfully carries on and writes your readiness marker anyway (A32). Wait for the thing you actually need, and check it.

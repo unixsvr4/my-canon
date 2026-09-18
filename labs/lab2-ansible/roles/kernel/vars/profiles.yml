@@ -194,9 +194,12 @@ kernel_profiles:
       # reserved at runtime through vm.nr_hugepages; 1GB pages CANNOT - the
       # allocator needs contiguous memory that only exists before userspace
       # has fragmented it. Reserve at boot or not at all.
+      #
+      # The COUNT is an input, because it depends on how much memory the host
+      # has and how much of it this database is meant to get.
       - default_hugepagesz=1G
       - hugepagesz=1G
-      - hugepages=8
+      - "hugepages={{ kernel_hugepages_1g }}"
     modules: []
     module_options: {}
     limits:
@@ -236,31 +239,37 @@ kernel_profiles:
       # jitter. Turning it off means a hard lockup will not be detected -
       # a deliberate trade, not an oversight.
       kernel.nmi_watchdog: 0
-    cmdline:
-      - transparent_hugepage=never
-      # C-states are CPU sleep states. Exiting C6 costs tens of microseconds,
-      # which is a lifetime here, and it happens exactly when a quiet core is
-      # handed work. Capping at C1 (and idle=poll, which never sleeps at all)
-      # removes that exit latency.
-      - intel_idle.max_cstate=1
-      - processor.max_cstate=1
-      - idle=poll
-      # The isolation set. All three must name the SAME cores, or the
-      # configuration is worse than doing nothing:
-      #   isolcpus    keep the scheduler off these cores
-      #   nohz_full   stop the 1000Hz timer tick on them
-      #   rcu_nocbs   move RCU callback processing off them
-      # Leave at least core 0 (and ideally one core per socket) out of the set
-      # for the kernel's own housekeeping.
-      - isolcpus=managed_irq,domain,2-7
-      - nohz_full=2-7
-      - rcu_nocbs=2-7
-      # Spread the remaining timer ticks so the housekeeping cores do not all
-      # fire in the same microsecond.
-      - skew_tick=1
-      # Trust the TSC as a clock source rather than re-validating it, which
-      # otherwise costs a periodic check.
-      - tsc=reliable
+    # Built from one expression rather than written as a plain list, because
+    # two parts of it are machine-dependent: WHICH cores are isolated, and
+    # whether idle=poll is wanted at all. Ansible returns a real list for a
+    # whole-string expression, so the role sees exactly what it sees for every
+    # other profile.
+    #
+    # C-states are CPU sleep states. Exiting C6 costs tens of microseconds,
+    # which is a lifetime here, and it happens precisely when a quiet core is
+    # handed work. Capping at C1 removes that exit latency; idle=poll goes
+    # further and never sleeps at all, for the power.
+    #
+    # The isolation set: isolcpus, nohz_full and rcu_nocbs must all name the
+    # SAME cores, or the configuration is worse than doing nothing.
+    #   isolcpus    keep the scheduler off these cores
+    #   nohz_full   stop the 1000Hz timer tick on them
+    #   rcu_nocbs   move RCU callback processing off them
+    #
+    # skew_tick spreads the remaining ticks so the housekeeping cores do not
+    # all fire in the same microsecond; tsc=reliable skips a periodic
+    # re-validation of the clock source.
+    cmdline: "{{
+      ['transparent_hugepage=never',
+       'intel_idle.max_cstate=1',
+       'processor.max_cstate=1']
+      + (['idle=poll'] if kernel_idle_poll | bool else [])
+      + ['isolcpus=managed_irq,domain,%s' | format(kernel_isolated_cpus),
+         'nohz_full=%s' | format(kernel_isolated_cpus),
+         'rcu_nocbs=%s' | format(kernel_isolated_cpus),
+         'skew_tick=1',
+         'tsc=reliable']
+      }}"
     modules: []
     module_options: {}
     limits:

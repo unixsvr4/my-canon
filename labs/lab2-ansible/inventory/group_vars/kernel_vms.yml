@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# group_vars/kernel_vms.yml - how to reach the four real VMs, and the
+# machine-dependent numbers their profiles need.
+#
+# WHY THIS IS A group_vars FILE AND NOT INLINE IN THE INVENTORY
+#
+# These variables were first written inline in inventory/kernel-vms.yml, where
+# they read perfectly well and did nothing. Every play tried to `docker exec`
+# into a container called 127.0.0.1 and failed with "Failed to create temporary
+# directory" - a message that says nothing about connections.
+#
+# The reason is Ansible's variable precedence, which is not the order people
+# assume:
+#
+#     3. inventory FILE group vars        <- where they were
+#     4. inventory group_vars/all         <- where the docker connection is set
+#     6. inventory group_vars/<group>     <- where they are now
+#
+# Group vars written inside an inventory file are LOWER precedence than
+# group_vars/all.yml. So all.yml's `ansible_connection: community.docker.docker`
+# (correct for the container labs, and applied to every inventory this project
+# loads) silently beat them.
+#
+# The lesson generalises: anything that must override a fleet-wide default
+# belongs in group_vars/<group>.yml, not in the inventory file. Same reason
+# group_vars/aws_ec2.yml exists rather than a block inside aws_ec2.yml.
+# =============================================================================
+
+# --- Connection ---------------------------------------------------------------
+# Real SSH to a forwarded local port. This is the line whose absence caused the
+# failure above; it has to be here to outrank all.yml.
+ansible_connection: ssh
+ansible_user: canon
+ansible_host: 127.0.0.1
+ansible_become: true
+
+ansible_ssh_private_key_file: "{{ lookup('env', 'VM_DIR') | default('/tmp/canon-kernel-vms', true) }}/id_ed25519"
+
+# Throwaway VMs, recreated from a pristine image by ./vms/up.sh, so their host
+# keys change every time. StrictHostKeyChecking is off for that reason and that
+# reason only - on a real fleet this is exactly the setting you do not touch.
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o ConnectTimeout=10
+
+# all.yml points remote_tmp-adjacent settings at containers; these are ordinary
+# hosts with a working HOME, so the default is right.
+ansible_remote_tmp: /home/canon/.ansible/tmp
+
+# --- What a VM can do that a container cannot ---------------------------------
+# Everything kernel-hosts.yml has to switch off is left at its default here,
+# because a VM owns its kernel:
+#
+#   kernel_sysctl_apply       true  - it can write /proc/sys
+#   kernel_sysctl_strict      true  - /proc/sys is ITS key set, not the host's
+#   kernel_manage_bootloader  true  - it has a real bootloader
+#
+# That contrast is the reason both halves of the lab exist.
+
+# --- Machine-dependent profile values -----------------------------------------
+# These VMs have 2 vCPUs and 2GB of RAM, so the production defaults (cores 2-7
+# isolated, eight 1GB huge pages) do not fit. That these are variables at all is
+# the point: a profile with a CPU range baked into it fits exactly one machine,
+# which is not a profile.
+kernel_isolated_cpus: "1"
+kernel_hugepages_1g: 1
+
+# idle=poll never lets the CPU sleep. On the isolated cores of a latency host
+# that is the trade being made deliberately; in a guest it pins a host core at
+# 100% for nothing, so the low-latency profile's other arguments are exercised
+# without it.
+kernel_idle_poll: false

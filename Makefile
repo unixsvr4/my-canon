@@ -30,11 +30,12 @@ TF_AWS_ROOTS := $(TF_AWS)/modules/app_stack $(TF_AWS)/envs/dev $(TF_AWS)/envs/pr
 unexport TF_LOG TF_LOG_PATH
 
 .PHONY: help ci all check test \
-        lab1-static lab1-test tf-examples lab1-scan \
+        lab1-static lab1-test tf-examples lab1-scan tf-scan \
         lab1-aws-static lab1-aws-test \
         lab1-up lab1-verify lab1-verify-demo lab1-down lab1-e2e \
         lab2-static lab2-up lab2-test lab2-idempotence-demo lab2-patch-demo lab2-drift-demo lab2-down \
         lab2-distros-up lab2-kernel-test lab2-kernel-demo lab2-distros-down \
+        lab2-vms-up lab2-kernel-reboot lab2-vms-down \
         lab3-static lab3-test lab3-artifacts clean
 
 help: ## List targets
@@ -44,7 +45,7 @@ ci: check test ## Static checks + tests that need no Docker (what CI runs)
 
 all: ci lab1-e2e lab2-up lab2-test lab2-patch-demo lab2-distros-up lab2-kernel-test lab3-artifacts ## Everything, including Docker-backed checks
 
-check: lab1-static lab1-aws-static lab1-scan lab2-static lab3-static ## All static checks
+check: lab1-static lab1-aws-static tf-scan lab2-static lab3-static ## All static checks
 
 test: lab1-test lab1-aws-test tf-examples lab3-test ## All tests that need no Docker
 
@@ -56,8 +57,14 @@ lab1-static: ## terraform fmt -check, init -backend=false, validate, tflint on e
 	  (cd $$d && terraform init -backend=false -input=false >/dev/null && terraform validate -no-color && tflint --no-color) || exit 1; \
 	done
 
-lab1-scan: ## trivy config scan of all Terraform, local and AWS (misconfiguration gate)
+tf-scan: ## trivy config scan of EVERY Terraform root in the repo (misconfiguration gate)
+	@# Both Terraform trees, not just lab 1's: lab 2 grew an EC2 rig for the
+	@# kernel role's reboot test, and a scan that silently stops at one
+	@# directory is a gate with a hole in it.
 	trivy config --quiet --exit-code 1 $(LAB1)
+	trivy config --quiet --exit-code 1 $(LAB2)/aws
+
+lab1-scan: tf-scan ## Alias kept so the documented command still works
 
 lab1-aws-static: ## init/validate/tflint the AWS roots with the aws ruleset (no credentials needed)
 	tflint --init --config="$(CURDIR)/$(TF_AWS)/.tflint.hcl" >/dev/null
@@ -168,6 +175,21 @@ lab2-kernel-demo: ## Show what each distribution got, and what is still waiting 
 
 lab2-distros-down: ## Remove the four distribution containers
 	cd $(LAB2) && ./setup-distros.sh --down
+
+# --- Lab 2: the real-kernel half -----------------------------------------------
+#
+# These are NOT in `make all`. They boot four QEMU virtual machines, reboot them
+# and install a new kernel in each, which takes about 15 minutes and a few GB of
+# downloaded images - too slow for a commit gate, and the only way to test the
+# one claim containers cannot make.
+lab2-vms-up: ## Boot four real VMs (own kernel, own bootloader) for the kernel role
+	cd $(LAB2) && ./vms/up.sh
+
+lab2-kernel-reboot: ## THE reboot proof on real kernels: apply, reboot, verify, upgrade the kernel, re-apply (about 15 min)
+	cd $(LAB2) && tests/kernel-reboot.sh
+
+lab2-vms-down: ## Shut the VMs down and delete their disks
+	cd $(LAB2) && ./vms/down.sh --clean
 
 lab2-down: ## Remove the lab containers
 	cd $(LAB2) && ./teardown.sh

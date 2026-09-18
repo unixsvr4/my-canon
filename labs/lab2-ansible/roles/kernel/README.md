@@ -27,7 +27,7 @@ This is the part that is genuinely different per distribution. The role's interf
 | **RHEL 9** / AlmaLinux / Rocky | `grubby --update-kernel=ALL` for the existing BLS entries in `/boot/loader/entries/`, **and** `GRUB_CMDLINE_LINUX` in `/etc/default/grub` for kernels installed later | none needed | Do only the first and **the tuning disappears at the next `dnf update kernel`** — the host reboots into the new kernel with the distribution's defaults and there is no configuration change to blame. Do only the second and nothing happens until a kernel update. |
 | **Ubuntu 24.04** / Debian 12 | a `99-` drop-in in `/etc/default/grub.d/` | `update-grub` | `grub-mkconfig` sources `/etc/default/grub` and *then* `/etc/default/grub.d/*.cfg`, as shell — so **the last assignment wins**. Every Ubuntu cloud image and AMI ships `50-cloudimg-settings.cfg`, which sets `GRUB_CMDLINE_LINUX_DEFAULT`. Edit `/etc/default/grub` and the cloud image overrides you afterwards. |
 | **SLES 15** / openSUSE | `GRUB_CMDLINE_LINUX_DEFAULT` in `/etc/default/grub` | `grub2-mkconfig` — **mandatory** | There is no grubby, so writing the file alone changes nothing. YaST writes the same file and reformats it; on SLE Micro, `transactional-update grub.cfg` and a reboot into the new snapshot. |
-| **Amazon Linux 2023** | same BLS + grubby as RHEL 9 | none needed | The mechanism is not the problem — **the lifecycle is**. See below. |
+| **Amazon Linux 2023** | same BLS + grubby as RHEL 9, but `GRUB_CMDLINE_LINUX_**DEFAULT**` | none needed | **Not the same key as RHEL 9**, and `grubby --remove-args` *blanks* `GRUB_CMDLINE_LINUX` here. Both measured on a real instance — see below. The lifecycle is a second problem again. |
 
 The sourcing order that decides the Ubuntu case was verified rather than assumed, by reading the script that does it:
 
@@ -45,6 +45,24 @@ done
 ```
 
 This is the same class of bug as the sshd drop-in in the [`baseline`](../baseline/README.md) role, with the ordering **reversed**: sshd takes the *first* value it reads, a sourced shell file keeps the *last*. Knowing which way round a given configuration system works is the whole job.
+
+### Amazon Linux is in the RHEL family and still different
+
+Two facts, both found on a real AL2023 instance and neither visible in a container:
+
+1. **AL2023 populates `GRUB_CMDLINE_LINUX_DEFAULT` and leaves `GRUB_CMDLINE_LINUX` empty.** RHEL 9 and AlmaLinux do the exact opposite — they fill `GRUB_CMDLINE_LINUX` and have no `_DEFAULT` line at all. So "the key a future kernel inherits from" is not the same key for two members of one family.
+2. **`grubby --update-kernel=ALL --remove-args=...` blanks the whole of `GRUB_CMDLINE_LINUX` on AL2023**, not just the named keys:
+
+```text
+after our write:      GRUB_CMDLINE_LINUX="probe_marker=1"
+after grubby remove:  GRUB_CMDLINE_LINUX=""
+```
+
+On AlmaLinux 9 the same command leaves that line untouched, and `_DEFAULT` survives on AL2023.
+
+Together those meant the role wrote its arguments into the variable AL2023 ignores, and then **its own next task erased them** — so the file churned on every run and the future-kernel protection was never really there. `vars/distro-Amazon.yml` now targets `_DEFAULT`, which is both the key AL2023 reads and the one grubby leaves alone.
+
+Worth noticing *how* this surfaced: the reboot test had been **passing** throughout, because grubby had done its half correctly and the BLS entries were right. What was being erased is the half that only matters after the next `dnf update kernel` — the failure that would have shown up weeks later, on a host nobody was watching, with no configuration change to blame. It was phase 3, "a re-apply must change nothing", that caught it.
 
 ## Amazon Linux: the mechanism is right and the answer is still wrong
 
@@ -149,6 +167,53 @@ This is the same idea as lab 1's `verify-env.py`: "the apply succeeded" and "the
 
 The role **never reboots by default** — a role that reboots when you did not ask is a role nobody runs on a Friday. `kernel_reboot_ok: true` allows it, and then a second check confirms the arguments really are in `/proc/cmdline` afterwards, because "we rebooted" is not the same as "it is active".
 
+## Proving it three ways
+
+"It survives a reboot" is the whole claim of layer 3, and a container cannot test it: a container shares the host's kernel, so `/proc/cmdline` inside one is the host's and every boot argument reads `PENDING` forever. So the role is proven on three rungs, each testing what the one below it cannot:
+
+| Rung | Proves | Cost | Time |
+|---|---|---|---|
+| **4 containers** — `tests/kernel-multidistro.sh` | the right file, in the right place, on four distributions; and idempotence | none | about 40s |
+| **4 QEMU VMs** — `tests/kernel-reboot.sh` | a real kernel **boots with those arguments**, survives a reboot, and a re-apply puts them on a **newly installed kernel** | none | about 15 min |
+| **4 EC2 instances** — [`../../aws/`](../../aws/) | the same, on the hardware and the AMIs that run the workload | about 0.07 USD/hour | about 20 min |
+
+### The reboot, measured
+
+```bash
+./vms/up.sh && tests/kernel-reboot.sh
+```
+
+Four VMs booting the distributions' own public cloud images under QEMU with Hypervisor.framework — their own kernel, their own bootloader, so `reboot` means what it says. Before the reboot every managed argument is `PENDING`. After it, read back from `/proc/cmdline` **outside Ansible**:
+
+| VM | Mechanism | Active after the reboot | Independent evidence |
+|---|---|---|---|
+| AlmaLinux 9.4 | `grubby` + BLS | `transparent_hugepage=never default_hugepagesz=1G hugepagesz=1G hugepages=1` | THP moved from `[always]` to `always madvise [never]` |
+| Ubuntu 24.04 | `99-` drop-in | `transparent_hugepage=madvise` | THP `always [madvise] never` — the drop-in beat the cloud image's `50-cloudimg-settings.cfg`, which is the whole reason for the `99-` prefix |
+| openSUSE Leap 15.6 | `grub2-mkconfig` | all 8 low-latency arguments | THP `[never]`; on this family writing the file alone would have changed nothing |
+| Amazon Linux 2023 | `grubby` + BLS | `systemd.unified_cgroup_hierarchy=1 cgroup_no_v1=all psi=1` | booted 6.1.186 |
+
+`vm.swappiness` is checked too, because layer 1 persists by a **different** mechanism — `systemd-sysctl` re-reading `/etc/sysctl.d` on boot — and one surviving does not imply the other did.
+
+### What rebooting for real found
+
+Three bugs that the container tests could not have caught, all now in [`RESEARCH.md`](../../../../RESEARCH.md):
+
+- **The strict sysctl check ran too early** (A27). It was in `validate.yml`, which runs *before* `modules.yml` — and `net.netfilter.nf_conntrack_max` does not exist until `nf_conntrack` is loaded. The ordering comment in `tasks/main.yml` says modules must come first *for exactly that reason*, and the check enforcing it was itself jumping the queue. It now lives in `sysctl.yml`.
+- **The role was not idempotent on the RHEL family** (A30). The grubby task was written `changed_when: true`, so every run reported a change on every RHEL-family host — the exact anti-pattern [`examples/idempotence/`](../../examples/idempotence/) exists to demonstrate, in this repository's own role. It now compares the boot entry's argument set before and after.
+- **Amazon Linux was writing to the wrong variable, and then wiping it** (A31, above).
+- **The report was stale** (A28). The role collected the state, rebooted, and then printed the numbers from *before* the reboot — `boot_args_pending=4` about a host that had just come back with all four active. The collection is now `verify-collect.yml` and runs twice.
+- **`hugepages=1` was active with zero pages reserved.** A hugepage count is a *request*: the kernel reserves what it can find contiguously at boot and carries on with less. `/proc/cmdline` still shows the argument, so a check that stops at "is it active?" reports success while the database gets small pages. The verifier now compares the request with `/sys/kernel/mm/hugepages/.../nr_hugepages` and fails on a shortfall.
+
+That last one is the pattern this whole role is built around, one level deeper than usual: **the file was right, the argument was active, and the thing it was for still had not happened.**
+
+### A new kernel
+
+The fourth phase is the question a production fleet actually asks. It installs a new kernel, reboots into it, **observes** whether the tuning came along, and then re-applies the role and requires every argument active on the new kernel.
+
+It observes rather than asserts because the answer is distribution-specific, and it is the failure the RHEL family's *two* writes exist for: `grubby` fixes the boot entries that exist **now**, and `GRUB_CMDLINE_LINUX` in `/etc/default/grub` is what a kernel installed **later** inherits from. Do only the first and the tuning disappears at the next `dnf update kernel` — with no configuration change to blame, on a host nobody was watching.
+
+Either way, the fix is the same and the test proves it: **re-run the role.** That is what makes a scheduled converge worth having over a one-time change.
+
 ## Run it
 
 Four containers, four distributions, four profiles. From `labs/lab2-ansible/`:
@@ -193,4 +258,5 @@ There is no bootloader in a container either, so the generator step reports that
 | `kernel_sysctl_strict: false` | left at `true`; the check is meaningful there |
 | boot arguments staged, no generator | `grubby` / `update-grub` / `grub2-mkconfig` run, and the reboot scheduled |
 | reboot reported | `patch.yml`'s `serial` batching and health gate, one host at a time |
-| `kernel_profile` in the inventory | from the `KernelProfile` tag Terraform stamps, via lab 2's `aws_ec2` inventory and lab 3's `cloud-hosts.yml` |
+| `kernel_profile` in the inventory | from the `KernelProfile` tag Terraform stamps, via lab 2's `aws_ec2` inventory (`compose:`) and lab 3's `cloud-hosts.yml` — decided once, by the thing that creates the machine |
+| four QEMU VMs | the EC2 rig in [`../../aws/`](../../aws/), or the real fleet; the role and the test are identical, only the inventory changes |

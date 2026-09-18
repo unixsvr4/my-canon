@@ -6,7 +6,7 @@ Three self-contained labs, one per layer of an infrastructure platform. Everythi
 |---|---|---|---|
 | [`lab1-terraform/`](lab1-terraform/) | resources: does it exist, what is it attached to | Terraform only | 16 `terraform test` runs (12 plan, 4 apply); both envs applied, verified, tampered, remediated and destroyed; 4 `for_each` demos; drift exit 2 → 0 with the record kept |
 | [`lab1-terraform/aws/`](lab1-terraform/aws/) | the same resources, on real AWS | Terraform + the `aws` provider | 22 runs (18 plan, 4 apply) against `mock_provider` in 2.7 s with no credentials; 11 mutations caught; `tflint` aws ruleset and `trivy` clean with 4 waivers reasoned in code |
-| [`lab2-ansible/`](lab2-ansible/) | inside the machine | Ansible + Docker | idempotent role (0 changes on run 2, 6 hosts); 8 bad inputs rejected; rolling patch stops after 3 hosts; kernel tuning on **4 distributions** with 20 artifact assertions + 16 contract cases; `ansible-lint` production profile |
+| [`lab2-ansible/`](lab2-ansible/) | inside the machine | Ansible + Docker (+ QEMU for real kernels) | idempotent role (0 changes on run 2, 6 hosts); 8 bad inputs rejected; rolling patch stops after 3 hosts; kernel tuning on **4 distributions** with 20 artifact assertions + 16 contract cases; and **4 real VMs rebooted** — arguments live in `/proc/cmdline`, then a kernel upgrade and a re-apply; `ansible-lint` production profile |
 | [`lab3-baremetal/`](lab3-baremetal/) | the physical build, and its cloud twin | Python (+ Docker for real-parser checks) | two source-of-truth files → kickstarts, DHCP, cloud-init, Terraform input, Ansible inventory; 39 unit tests; `dhcpd -t`, `ksvalidator` and `cloud-init schema` pass |
 
 ## How they connect
@@ -34,11 +34,12 @@ The join between the labs is a **tag set** — `Environment`, `Role`, `Service`,
 | ansible-core | 2.21.4 (≥ 2.15 required) | labs 2 and 3 |
 | ansible-lint | 26.8.0 | `make check` only |
 | Docker | 29.4 | lab 2 (six AlmaLinux hosts + four distribution hosts); lab 3 artifact checks |
+| QEMU | 11.1.1 (`-accel hvf`, aarch64) | lab 2's reboot proof only — four real VMs; `make lab2-vms-up` |
 | Python | 3.12+ (verified on 3.14) | labs 1, 2 and 3 scripts |
 
 ## Suggested order
 
-1. **Lab 2**: the richest. Role design, idempotence, safe rollouts, drift. About 45 minutes — plus 25 for the `kernel` role across four distributions.
+1. **Lab 2**: the richest. Role design, idempotence, safe rollouts, drift. About 45 minutes — plus 25 for the `kernel` role across four distributions, and 15 more if you want to watch four real kernels reboot (`make lab2-vms-up lab2-kernel-reboot`).
 2. **Lab 1**: `for_each`, the module tests, and verifying live environments. About 50 minutes — then [`aws/`](lab1-terraform/aws/) for the real provider and what a mocked apply test can and cannot prove, about 30.
 3. **Lab 3**: the build pipeline, its cloud twin, and their validation. About 30 minutes.
 

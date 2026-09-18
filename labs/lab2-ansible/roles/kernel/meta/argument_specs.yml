@@ -88,6 +88,34 @@ argument_specs:
           - Extra resource limits, added to the profile's. Each is written as
             both a soft and a hard limit.
 
+      kernel_isolated_cpus:
+        type: str
+        required: false
+        default: "2-7"
+        description:
+          - Cores the low-latency profile hands to the workload. isolcpus,
+            nohz_full and rcu_nocbs are all derived from this, because naming
+            different sets in each is worse than not isolating at all.
+
+      kernel_hugepages_1g:
+        type: int
+        required: false
+        default: 8
+        description:
+          - How many 1GB huge pages the database profile reserves at boot.
+            1GB pages cannot be reserved at runtime, and asking for more than
+            the host has leaves you with none.
+
+      kernel_idle_poll:
+        type: bool
+        required: false
+        default: true
+        description:
+          - Whether the low-latency profile adds idle=poll. It removes C-state
+            exit latency and roughly doubles the isolated cores' idle power
+            draw, so it is an explicit choice rather than a hidden cost of the
+            profile.
+
       kernel_sysctl_file:
         type: str
         required: false

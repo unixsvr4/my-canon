@@ -8,6 +8,13 @@ Behavioural tests for the roles, from `labs/lab2-ansible/`. The first two need t
 | [`input-validation.sh`](input-validation.sh) | bad inputs are rejected before any task touches a host | 8 of 8 invalid inputs fail with the expected message |
 | [`kernel-multidistro.sh`](kernel-multidistro.sh) | one role produced **each distribution's own** persistence artifact, and is idempotent on all four | 20 artifact assertions pass, then `changed=0` on 4 hosts |
 | [`kernel-contract.sh`](kernel-contract.sh) | bad kernel input is rejected, and the boot-argument merge is declarative | 16 of 16 cases |
+| [`kernel-reboot.sh`](kernel-reboot.sh) | the boot arguments **really take effect across a reboot**, and a re-apply puts them on a newly installed kernel | 4 real VMs (`../vms/up.sh` first): every managed argument live in `/proc/cmdline`, THP actually switched, `changed=0` on a re-apply, and every argument active again after a kernel upgrade |
+
+## Why `kernel-reboot.sh` needs virtual machines
+
+Containers share the host's kernel. `/proc/cmdline` inside one is the host's, so the role's layer-3 arguments are reported `PENDING` forever and the claim they exist to make — *it survives a reboot* — cannot be tested at all. `../vms/up.sh` boots four real guests under QEMU, with their own kernel and their own bootloader, so `reboot` means what it says.
+
+It is slow (two reboots and a kernel upgrade per host, about 15 minutes) and therefore not in `make ci`. It found four bugs the container tests could not, all in [`RESEARCH.md`](../../../RESEARCH.md): the strict sysctl check running before the modules that provide those keys (A27), a stale post-reboot report (A28), `changed_when: true` making the role report a change on every RHEL-family run (A30), and Amazon Linux getting its arguments written to a variable it does not read — which the role's own next task then blanked (A31).
 
 ## Why `kernel-multidistro.sh` asserts artifacts and not just success
 

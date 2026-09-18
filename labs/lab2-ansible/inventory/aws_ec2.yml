@@ -95,6 +95,20 @@ compose:
   # in group_vars/aws.yml for how the controller reaches them without one.
   ansible_host: private_ip_address
 
+  # THE TAG DRIVES THE ROLE.
+  #
+  # kernel_profile is the kernel role's main input, and it comes straight from
+  # the KernelProfile tag that Terraform stamped when it created the instance.
+  # So the workload posture of a host is decided once, in the source of truth,
+  # and neither the playbook nor any group_vars file holds a second copy to
+  # drift from. A new database instance is tuned as a database the first time
+  # it converges, with nobody editing an inventory.
+  #
+  # tags.KernelProfile is quoted with a default so a host that predates the tag
+  # gets the safe baseline instead of failing the whole inventory under
+  # `strict: true`.
+  kernel_profile: tags.KernelProfile | default('general', true)
+
   # Carry the instance id through as a fact, so a per-host record in
   # reports/run/ can be correlated with CloudWatch, the ASG and the console.
   # A hostname is not a stable identifier on a fleet that scales.

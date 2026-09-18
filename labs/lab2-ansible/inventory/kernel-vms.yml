@@ -1,0 +1,65 @@
+---
+# =============================================================================
+# The REAL-KERNEL half of the kernel lab: four QEMU virtual machines.
+#
+#   ./vms/up.sh
+#   ansible-playbook -i inventory/kernel-vms.yml kernel.yml
+#   tests/kernel-reboot.sh
+#
+# Same four distribution families and the same four profiles as
+# kernel-hosts.yml (the containers), so the two are directly comparable. The
+# difference is the one that matters: these have their own kernel and their own
+# bootloader, so `reboot` reboots and the boot arguments actually take effect.
+#
+# The containers prove the file mechanics on four distributions in seconds. The
+# VMs prove the EFFECT, which is the whole reason the setting exists. Both
+# halves are worth having, and neither replaces the other.
+#
+# Connection settings and the machine-dependent profile values live in
+# group_vars/kernel_vms.yml, NOT here - see the comment at the top of that file
+# for the precedence reason, which cost an hour.
+# =============================================================================
+all:
+  children:
+
+    # kernel_tuned is the group kernel.yml targets, and both inventories
+    # provide it - the containers in kernel-hosts.yml and these VMs. kernel_vms
+    # is nested inside it so `--limit kernel_vms` selects the real-kernel half.
+    kernel_tuned:
+      children:
+        kernel_vms:
+          hosts:
+
+            kvm-rhel:
+              ansible_port: 2231
+              # RHEL 9 family: grubby rewrites the existing BLS entries, and
+              # GRUB_CMDLINE_LINUX is what a kernel installed LATER inherits.
+              # The kernel-upgrade half of tests/kernel-reboot.sh is aimed
+              # squarely at this host.
+              kernel_profile: database
+
+            kvm-ubuntu:
+              ansible_port: 2232
+              kernel_profile: throughput
+              # The throughput profile needs no boot arguments of its own, so
+              # this host adds one - which is what makes the Debian drop-in do
+              # real work here, and gives the reboot something to prove.
+              kernel_cmdline_extra:
+                - transparent_hugepage=madvise
+
+            kvm-suse:
+              ansible_port: 2233
+              # openSUSE Leap 15.6's own python3 is 3.6.15, which ansible-core
+              # cannot run modules on; ./vms/up.sh installs python311 through
+              # cloud-init and this pins it (RESEARCH.md A18).
+              ansible_python_interpreter: /usr/bin/python3.11
+              # The profile with the most boot arguments, on the distribution
+              # where writing the file alone does nothing because there is no
+              # grubby - so this host also proves grub2-mkconfig ran.
+              kernel_profile: low-latency
+
+            kvm-amazon:
+              ansible_port: 2234
+              kernel_profile: container-host
+              kernel_sysctl_extra:
+                net.ipv4.tcp_congestion_control: bbr

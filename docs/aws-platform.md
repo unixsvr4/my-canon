@@ -45,6 +45,8 @@ The real implementation of the module the rest of lab 1 models with `local_file`
 
 The `kernel` role gains an AWS-specific piece of judgement rather than an AWS-specific code path; see the constraint below.
 
+`labs/lab2-ansible/aws/` is a second, separate root: four EC2 instances, one per distribution family, for proving the **kernel role's boot-argument layer** on the hardware and the AMIs that run the workload. It is a throwaway test rig rather than part of the platform - no load balancer, no database, no NAT gateway - and it is the one place in this repository that uses SSH rather than Session Manager, for a stated reason (its whole job is to reboot four machines and watch them come back). About 0.07 USD an hour; no `make` target applies it.
+
 ### Lab 3 — [`labs/lab3-baremetal/cloud-hosts.yml`](../labs/lab3-baremetal/cloud-hosts.yml)
 
 The second record type: machines that are declared rather than built. The renderer emits cloud-init user data, Terraform input, and the tag-contract preview. `scripts/ssm_hybrid_register.sh` registers **physical** servers into Systems Manager, so one control plane covers both halves of the fleet.
@@ -58,6 +60,7 @@ This is the same class of problem as a `%post` block in a kickstart — a one-ti
 | Layer | On-premises | On AWS |
 |---|---|---|
 | runtime sysctls, module options, limits | Ansible, on a schedule | Ansible **or** user data; both are fine because both can be re-asserted |
+| the kernel profile itself | a group in the inventory | the **`KernelProfile` tag**, read into `kernel_profile` by the `aws_ec2` inventory's `compose`. Decided once, by the thing that creates the machine |
 | **kernel boot arguments** | Ansible, then a scheduled reboot | **the AMI.** Image Builder runs the same role, reboots during the build, and `kernel_fail_on_reboot_required: true` makes an unfinished image a failed build |
 | packages | the `patch` role, batched, with a health gate | the same for long-lived instances; a new AMI for an immutable fleet |
 | configuration that must stay correct | Ansible, always | Ansible, always — plus SSM State Manager for enforcement |
@@ -97,12 +100,14 @@ Being precise about this matters more than the feature list. `make ci` runs in a
 | the rendered cloud-init user data | `cloud-init schema`, the real validator, in a container |
 | the tag contract | 39 unit tests, one of which checks the groups the playbooks target |
 | the dynamic inventory's configuration | `ansible-inventory --list` parses it (no credentials needed to parse) |
+| **the kernel role's boot arguments taking effect** | `make lab2-vms-up lab2-kernel-reboot` - four real VMs rebooted, then a kernel upgrade and a re-apply. A `make` target, but deliberately not part of `make ci` or `make all`: about 15 minutes |
 
 | Reviewed, not run | Why, and what would exercise it |
 |---|---|
 | `terraform apply` of `envs/dev` or `envs/prod` | it costs money and touches a real account. A nightly apply/destroy into a sandbox account is the missing gate; the cost table in the [AWS README](../labs/lab1-terraform/aws/README.md#cost-honestly) says what it would be. |
 | `envs/bootstrap` | run once per account, by a human, with elevated credentials. |
 | the `aws_ec2` inventory returning hosts | needs credentials and instances. Without them it returns an **empty group rather than an error**, which is worth knowing: "no hosts matched" is what a missing identity looks like. |
+| the EC2 kernel rig (`labs/lab2-ansible/aws/`) | it creates billable instances. `validate`, `tflint` and `trivy` cover it; the first `apply` is the first time the AMI data-source filters resolve against a real account. The same test has been run to completion on four **local VMs** with real kernels, including a kernel upgrade, so what EC2 adds is the platform rather than the logic. |
 | Session Manager connections | needs instances, an instance profile and the transfer bucket. |
 | hybrid activation | needs an account and a physical server. The script is syntax-checked and its source-of-truth guard is exercised. |
 

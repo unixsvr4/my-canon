@@ -14,6 +14,8 @@ Six throwaway containers stand in for six servers. No VMs, no SSH keys, no cost.
 | A **safe rolling patch**: canary, batches, abort, quarantine, retry | `patch.yml`, `roles/patch/` | run stops after 3 hosts; retry touches only failures |
 | **Drift detection** with an exit code and a record that survives the fix | `drift-check.sh`, `drift-show.py` | exit 2 on drift, 0 after remediation, record kept |
 | **Kernel tuning that survives a reboot** on RHEL, Ubuntu, SUSE and Amazon Linux | `roles/kernel/` | `tests/kernel-multidistro.sh` — 4 distributions, 4 mechanisms, 20 artifact assertions, 0 changes on run 2 |
+| ...and it really does survive one | `vms/`, `tests/kernel-reboot.sh` | 4 **real VMs** rebooted; every argument live in `/proc/cmdline`, THP actually off, then a **kernel upgrade** and a re-apply |
+| The same role on **real EC2** | `aws/` | 4 instances, one per family, profile driven by the `KernelProfile` tag (validated and scanned; applying costs about 0.07 USD/hour) |
 | Declarative **removal** of a boot argument, not just addition | `roles/kernel/tasks/bootloader-file.yml` | `tests/kernel-contract.sh` — vendor arguments preserved, stale values gone, no key twice |
 | The same fleet on **AWS**: inventory from tags, access without SSH | `inventory/aws_ec2.yml`, `inventory/group_vars/aws_ec2.yml` | `make lab2-static` parses the plugin config; groups match lab 3's rendered tag contract |
 | Lint-clean at the strictest profile | `.ansible-lint` | `ansible-lint` — `production` profile passes |
@@ -30,8 +32,9 @@ lab2-ansible/
 ├── inventory/               # hosts on three axes + group_vars layering
 │   ├── hosts.yml            # the six lab containers
 │   ├── kernel-hosts.yml     # the four distribution containers
+│   ├── kernel-vms.yml       # the four REAL VMs (own kernel) for the reboot proof
 │   ├── aws_ec2.yml          # PRODUCTION inventory: EC2, grouped by the tags Terraform stamps
-│   └── group_vars/aws_ec2.yml  # Session Manager instead of SSH; secrets from Secrets Manager
+│   └── group_vars/          # aws_ec2.yml (SSM, no SSH), kernel_vms.yml (connection + machine sizes)
 ├── roles/
 │   ├── baseline/            # the reusable, idempotent, validated role
 │   ├── kernel/              # reboot-persistent kernel tuning, four persistence mechanisms
@@ -40,6 +43,8 @@ lab2-ansible/
 ├── tests/                   # idempotence, input-contract, and the kernel role's two suites
 ├── setup.sh / teardown.sh   # create / remove the six lab hosts
 ├── setup-distros.sh         # create / remove the four distribution hosts (--down)
+├── vms/                     # four REAL VMs (own kernel + bootloader) for the reboot proof
+├── aws/                     # four EC2 instances, one per family (costs money; you run it)
 ├── tamper.sh                # simulate an out-of-band edit, and prove it landed
 ├── drift-check.sh           # check mode -> exit code + immutable drift record
 ├── drift-show.py            # read the drift archive
@@ -48,7 +53,9 @@ lab2-ansible/
 
 ## Prerequisites
 
-`ansible-core` ≥ 2.15 (verified on 2.21.4), Docker, Python 3. `setup.sh` installs the pinned collections. From the repository root, `make lab2-up` then `make lab2-test` runs everything below.
+`ansible-core` ≥ 2.15 (verified on 2.21.4), Docker, Python 3. `setup.sh` installs the pinned collections. From the repository root, `make lab2-up` then `make lab2-test` runs steps 1–7.
+
+Steps 8–11 need more: `setup-distros.sh` pulls four distribution images (Docker); `vms/up.sh` needs **QEMU** (`brew install qemu`, verified on 11.1.1) and downloads about 3GB of cloud images into `/tmp`; step 10 needs an **AWS account** and costs about 0.07 USD an hour.
 
 ---
 
@@ -239,7 +246,56 @@ The distribution's own arguments survived; the stale `hugepages=99` and `transpa
 
 Full reasoning, the four mechanisms, and the five profiles: [`roles/kernel/README.md`](roles/kernel/README.md).
 
-## Step 9 — the same fleet on AWS
+## Step 9 — reboot four real kernels, then upgrade them
+
+Everything in step 8 is about the *files*. A container cannot test the claim those files exist to make, because it shares the host's kernel: `/proc/cmdline` inside one is the host's, and the boot arguments read `PENDING` forever.
+
+```bash
+./vms/up.sh
+```
+
+Four QEMU virtual machines booting the distributions' own public cloud images under Hypervisor.framework — their own kernel, their own bootloader, so `reboot` means what it says. Free, and about 15 seconds each to boot.
+
+```bash
+tests/kernel-reboot.sh
+```
+
+Four phases: **apply** (arguments written, reported `PENDING` — correct, and not yet proof of anything), **reboot** (the role reboots, re-reads `/proc/cmdline`, and the test then verifies it again from outside Ansible), **re-apply** (`changed=0` against a live, tuned kernel), and **a new kernel** (install one, boot into it, observe what survived, re-apply, require every argument active).
+
+What comes back after the reboot:
+
+| VM | Mechanism | Active in `/proc/cmdline` | Independently checked |
+|---|---|---|---|
+| AlmaLinux 9.4 | `grubby` + BLS | `transparent_hugepage=never default_hugepagesz=1G hugepagesz=1G hugepages=1` | THP moved `[always]` → `[never]` |
+| Ubuntu 24.04 | `99-` drop-in | `transparent_hugepage=madvise` | THP `[madvise]` — the drop-in beat the cloud image's `50-cloudimg-settings.cfg` |
+| openSUSE Leap 15.6 | `grub2-mkconfig` | all 8 low-latency arguments | THP `[never]` |
+| Amazon Linux 2023 | `grubby` + BLS | `systemd.unified_cgroup_hierarchy=1 cgroup_no_v1=all psi=1` | booted 6.1.186 |
+
+`vm.swappiness` is checked too, because layer 1 comes back by a **different** mechanism (`systemd-sysctl` re-reading `/etc/sysctl.d`) and one surviving does not imply the other did.
+
+Rebooting for real found **six** bugs the container tests structurally could not. Three in the role's logic: the strict sysctl check ran *before* the modules that provide those keys were loaded (A27); the verifier printed its pre-reboot numbers *after* rebooting (A28); and the role reported `changed` on **every run** of the entire RHEL family, because the grubby task was written `changed_when: true` (A30) — the exact anti-pattern `examples/idempotence/` exists to demonstrate, in this repository's own role.
+
+Two specific to Amazon Linux, and neither visible anywhere but a real AL2023 host (A31): it populates `GRUB_CMDLINE_LINUX_DEFAULT` where RHEL 9 populates `GRUB_CMDLINE_LINUX`, and `grubby --remove-args` **blanks the whole of `GRUB_CMDLINE_LINUX`** there — so the role wrote its arguments into the variable AL2023 ignores and then erased them with its own next task. The reboot test passed the entire time, because grubby had done its half correctly; the half being erased is the one that matters after the next `dnf update kernel`.
+
+And one in the harness: `hugepages=1` was active in `/proc/cmdline` with **zero pages actually reserved**. A hugepage count is a *request* — the kernel reserves what it can find contiguously and carries on with less — so every check that stops at "is the argument active?" calls that a success. The verifier now compares the request with the reservation.
+
+All six are in [`RESEARCH.md`](../../RESEARCH.md).
+
+```bash
+./vms/down.sh --clean
+```
+
+## Step 10 — the same role, on real AWS
+
+```bash
+cd aws && terraform apply -var "ssh_ingress_cidr=$(curl -s https://checkip.amazonaws.com)/32"
+```
+
+Four EC2 instances, one per distribution family, tuned by the same role and the same profiles. **This one costs money** — about 0.07 USD an hour for four `t4g.small`, and nothing once destroyed. No `make` target applies it; see [`aws/README.md`](aws/README.md) for the cost table and what is different about EC2 (the AMI's own boot arguments, a hypervisor reboot, and Amazon Linux on the platform it belongs on).
+
+The integration worth noticing: the instances are tagged `KernelProfile`, and [`inventory/aws_ec2.yml`](inventory/aws_ec2.yml) reads that tag into `kernel_profile` with `compose`. The workload posture is decided once, by the thing that creates the machine, and nothing else keeps a copy to drift from.
+
+## Step 11 — the production inventory: found by tag, reached without SSH
 
 Nothing above changes. What changes is where the host list comes from and how the controller reaches it.
 
