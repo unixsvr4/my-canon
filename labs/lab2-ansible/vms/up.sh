@@ -2,10 +2,24 @@
 # =============================================================================
 # Four REAL virtual machines, each with its own kernel, so a reboot is a reboot.
 #
-#   ./vms/up.sh                 create and boot all four
-#   ./vms/up.sh kvm-rhel        just one
-#   ./vms/down.sh               shut them down
-#   ./vms/down.sh --clean       ...and delete the disks (keeps the base images)
+#   ./vms/up.sh                     create and boot all four
+#   ./vms/up.sh kvm-rhel            just one
+#   ./vms/down.sh                   shut them all down
+#   ./vms/down.sh kvm-rhel          shut just that one down
+#   ./vms/down.sh --clean           ...and delete the disks (keeps the base images)
+#
+# ONE AT A TIME IS THE NORMAL WAY TO RUN THIS ON A LAPTOP. The four guests ask
+# for 4096 + 2048 + 2048 + 2560 MiB between them, about 10.7GB, which does not
+# fit comfortably beside a browser and an IDE on a 16GB machine. Each VM has a
+# playbook of its own for that reason:
+#
+#   ./vms/up.sh kvm-suse
+#   ansible-playbook -i inventory/kernel-vms.yml kernel-suse.yml
+#   tests/kernel-reboot.sh kvm-suse
+#   ./vms/down.sh kvm-suse
+#
+# Booting all four at once is faster when the memory is there, because the
+# boots overlap; nothing else about the lab changes.
 #
 # WHY THIS EXISTS, ON TOP OF THE CONTAINERS
 #
@@ -26,6 +40,13 @@
 # THE IMAGES ARE DELIBERATELY OLD (AlmaLinux 9.4, Ubuntu 24.04 GA, Amazon Linux
 # 2023.4 - all from early 2024). A current image has nothing to upgrade, and the
 # second half of the test needs a REAL kernel upgrade to boot into.
+#
+# EVERY URL POINTS AT AN ARCHIVED VERSION, NOT AT `latest`. The Amazon Linux one
+# used to be a dated filename under .../os-images/latest/kvm-arm64/, which is two
+# incompatible ideas in one URL: `latest` moves, the filename does not, so the
+# combination 403s the day AWS publishes a new release - and it did, two days
+# after it was written. A versioned directory is permanent, and "old on purpose"
+# is a thing you can only say about a pinned version anyway.
 # =============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -49,7 +70,7 @@ VMS=(
   "kvm-rhel   | alma   | 2231 | 4096 | https://repo.almalinux.org/vault/9.4/cloud/aarch64/images/AlmaLinux-9-GenericCloud-9.4-20240507.aarch64.qcow2"
   "kvm-ubuntu | ubuntu | 2232 | 2048 | https://cloud-images.ubuntu.com/releases/24.04/release-20240423/ubuntu-24.04-server-cloudimg-arm64.img"
   "kvm-suse   | suse   | 2233 | 2048 | https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.aarch64-Cloud.qcow2"
-  "kvm-amazon | amazon | 2234 | 2560 | https://cdn.amazonlinux.com/al2023/os-images/latest/kvm-arm64/al2023-kvm-2023.12.20260917.1-kernel-6.1-arm64.xfs.gpt.qcow2"
+  "kvm-amazon | amazon | 2234 | 2560 | https://cdn.amazonlinux.com/al2023/os-images/2023.4.20240401.1/kvm-arm64/al2023-kvm-2023.4.20240401.1-kernel-6.1-arm64.xfs.gpt.qcow2"
 )
 
 field() { printf '%s' "$1" | cut -d'|' -f"$2" | sed 's/^ *//; s/ *$//'; }
@@ -85,7 +106,19 @@ boot_one() {
 
   if [ ! -s "$base" ]; then
     echo "downloading $image ..."
-    curl -fsSL --retry 3 -o "$base.part" "$url" && mv "$base.part" "$base"
+    # A failed download used to fall through to qemu-img, which then reported
+    # "Could not open backing image" about a file nobody asked for - the error
+    # naming the wrong layer. The URL that failed is the useful fact.
+    if ! curl -fsSL --retry 3 -o "$base.part" "$url"; then
+      rm -f "$base.part"
+      echo "[ERROR] could not download the $image image:"
+      echo "        $url"
+      echo "        Distributions move and retire cloud images. Check the URL in"
+      echo "        the VMS table at the top of this script; every one of them is"
+      echo "        pinned to an archived version on purpose."
+      return 1
+    fi
+    mv "$base.part" "$base"
   fi
 
   # A qcow2 overlay, so the base image stays pristine and `down.sh --clean`
@@ -268,6 +301,22 @@ wait_ready() {
 }
 
 WANTED=("$@")
+
+# A name that matches nothing used to start nothing and exit 0, which looks
+# exactly like "they were all already running". Same check as down.sh.
+for want in "${WANTED[@]}"; do
+  found=0
+  for entry in "${VMS[@]}"; do
+    [ "$(field "$entry" 1)" = "$want" ] && found=1
+  done
+  if [ $found -eq 0 ]; then
+    known=""
+    for entry in "${VMS[@]}"; do known="$known $(field "$entry" 1)"; done
+    echo "[ERROR] unknown VM: $want (known:$known)"
+    exit 2
+  fi
+done
+
 started=()
 for entry in "${VMS[@]}"; do
   name=$(field "$entry" 1)

@@ -112,6 +112,7 @@ The rule is the same one `platform-translation.md` gives for a second cloud: **k
 Two things that generalise beyond kernel tuning:
 
 - **Those platform-loading tasks are tagged `always`.** They are prerequisites of every other tag, not a section of their own; without it, `--tags one_section` fails with an undefined variable (`RESEARCH.md` A19).
+- **One implementation, several entry points.** A playbook's `hosts:` is templated from play vars, so `hosts: "{{ kernel_target | default('kernel_tuned') }}"` plus four files that do nothing but `import_playbook: kernel.yml` with their own `kernel_target` gives four named doors into one copy of the logic. `--limit` reaches the same hosts; what it does not do is let each door add something of its own — here, a read-only play that prints the artifact *that* distribution's mechanism produced, which is the difference between applying the role and showing what it did. Reach for this when the entry points differ in what they should *explain*, and stay with `--limit` when they do not.
 - **`/bin/sh` is not portable for a shell task.** It is dash on Debian and Ubuntu, and dash has no `set -o pipefail` — which ansible-lint's `risky-shell-pipe` requires. All the mainstream server distributions ship bash, so `executable: /bin/bash` is the portable choice, which is the opposite of the usual advice and true for a specific reason (A17).
 
 ## Declarative means removals work

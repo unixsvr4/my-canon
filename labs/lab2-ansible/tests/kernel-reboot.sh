@@ -366,8 +366,18 @@ fi
 
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "VERIFIED: $pass check(s) passed. Boot arguments survive a reboot, and a"
-  echo "          re-apply puts them on a newly installed kernel."
+  # The summary says only what this run actually tested. With SKIP_UPGRADE=1
+  # phase 4 never happened, and claiming the new-kernel result anyway is the
+  # same class of mistake as a check that silently skips itself and reports
+  # PASS - which is exactly what A33 was.
+  if [ "${SKIP_UPGRADE:-0}" = "1" ]; then
+    echo "VERIFIED: $pass check(s) passed. Boot arguments survive a reboot."
+    echo "          Phase 4 was skipped, so this run says NOTHING about what"
+    echo "          happens after a kernel upgrade - drop SKIP_UPGRADE for that."
+  else
+    echo "VERIFIED: $pass check(s) passed. Boot arguments survive a reboot, and a"
+    echo "          re-apply puts them on a newly installed kernel."
+  fi
   exit 0
 fi
 echo "FAILED: $fail check(s) failed, $pass passed."

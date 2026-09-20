@@ -29,6 +29,10 @@ lab2-ansible/
 ├── site.yml                 # converge every host to the baseline role
 ├── patch.yml                # rolling patch: serial, max_fail_percentage, health gate, quarantine
 ├── kernel.yml               # kernel tuning across four distributions, serial, with a reboot gate
+├── kernel-rhel.yml          # ...one host at a time: imports kernel.yml, then shows that family's
+├── kernel-ubuntu.yml        #    own artifact - the BLS entry, the drop-in, the generated grub.cfg,
+├── kernel-suse.yml          #    both of Amazon Linux's grub keys. Four QEMU guests want about
+├── kernel-amazon.yml        #    10.7GB between them, so one at a time is the laptop-sized path
 ├── inventory/               # hosts on three axes + group_vars layering
 │   ├── hosts.yml            # the six lab containers
 │   ├── kernel-hosts.yml     # the four distribution containers
@@ -56,6 +60,8 @@ lab2-ansible/
 `ansible-core` ≥ 2.15 (verified on 2.21.4), Docker, Python 3. `setup.sh` installs the pinned collections. From the repository root, `make lab2-up` then `make lab2-test` runs steps 1–7.
 
 Steps 8–11 need more: `setup-distros.sh` pulls four distribution images (Docker); `vms/up.sh` needs **QEMU** (`brew install qemu`, verified on 11.1.1) and downloads about 3GB of cloud images into `/tmp`; step 10 needs an **AWS account** and costs about 0.07 USD an hour.
+
+The four VMs also ask for about **10.7GB of memory** between them (4096 + 2048 + 2048 + 2560 MiB), which is most of a 16GB laptop. Every part of step 9 takes one VM name — `./vms/up.sh kvm-suse`, `kernel-suse.yml`, `tests/kernel-reboot.sh kvm-suse`, `./vms/down.sh kvm-suse` — so the whole lab runs one distribution at a time in about 2.5GB.
 
 ---
 
@@ -249,6 +255,50 @@ Full reasoning, the four mechanisms, and the five profiles: [`roles/kernel/READM
 ## Step 9 — reboot four real kernels, then upgrade them
 
 Everything in step 8 is about the *files*. A container cannot test the claim those files exist to make, because it shares the host's kernel: `/proc/cmdline` inside one is the host's, and the boot arguments read `PENDING` forever.
+
+### One distribution at a time
+
+Booting all four at once is faster when the memory is there, because the boots overlap. It is also about 10.7GB, so the normal way to run this on a laptop is one VM at a time — and each one has a playbook of its own:
+
+| VM | Playbook | Profile | The mechanism it ends by printing | RAM |
+|---|---|---|---|---|
+| `kvm-rhel` (AlmaLinux 9.4) | `kernel-rhel.yml` | database | the BLS entry `grubby` rewrote, **and** `GRUB_CMDLINE_LINUX`, which is what the *next* kernel inherits | 4096 MiB |
+| `kvm-ubuntu` (Ubuntu 24.04) | `kernel-ubuntu.yml` | throughput | `/etc/default/grub.d`, in sort order, so you can see `99-canon-kernel.cfg` land after the cloud image's `50-cloudimg-settings.cfg` | 2048 MiB |
+| `kvm-suse` (Leap 15.6) | `kernel-suse.yml` | low-latency | the file the **generator** wrote, not the one the role edited — on SUSE, editing `/etc/default/grub` and stopping there changes nothing | 2048 MiB |
+| `kvm-amazon` (AL2023) | `kernel-amazon.yml` | container-host | **both** grub keys, because AL2023 reads `_DEFAULT` and `grubby --remove-args` blanks the other one (A31) | 2560 MiB |
+
+```bash
+./vms/up.sh kvm-suse
+```
+
+```bash
+ansible-playbook -i inventory/kernel-vms.yml kernel-suse.yml
+```
+
+```bash
+tests/kernel-reboot.sh kvm-suse
+```
+
+```bash
+./vms/down.sh kvm-suse
+```
+
+`make lab2-vm-suse` does the first two together; `make lab2-kernel-reboot VM=kvm-suse` and `make lab2-vms-down VM=kvm-suse` do the rest.
+
+Measured this way, one VM at a time, with nothing else booted:
+
+| VM | Applied | Rebooted | Independently checked |
+|---|---|---|---|
+| `kvm-ubuntu` | `ok=39 changed=8` | 3 checks pass | THP `always [madvise] never`; the drop-in beat `50-cloudimg-settings.cfg` |
+| `kvm-suse` | `ok=42 changed=8` | 4 checks pass | 8 arguments pending → active; `grub.cfg` written by `grub2-mkconfig` at the timestamp the evidence prints |
+| `kvm-amazon` | `ok=45 changed=9` | 3 checks pass | `GRUB_CMDLINE_LINUX` **absent**, `_DEFAULT` carrying all three arguments — A31, on screen |
+| `kvm-rhel` | `ok=43 changed=8` | 8 checks pass, including the kernel upgrade | 5.14.0-427 (9.4) → **5.14.0-687** (9.8), every managed argument inherited, 1GB huge page actually reserved |
+
+Only the RHEL run included phase 4. `SKIP_UPGRADE=1` skips it, and the summary then says so rather than claiming a result it did not produce — it used to claim it (`RESEARCH.md` A36).
+
+The four playbooks are not four copies of the tuning. Each is an `import_playbook: kernel.yml` with `kernel_target` set to its host — one copy of the bootstrap check, the role call and the summary, four entry points into it — followed by a read-only play that prints that family's artifact. `kernel.yml --limit kvm-suse` applies exactly the same tuning; what it does not do is show you *which of the four mechanisms* was used, which is the whole claim the role makes.
+
+### All four
 
 ```bash
 ./vms/up.sh

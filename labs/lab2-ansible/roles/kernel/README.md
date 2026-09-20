@@ -183,6 +183,18 @@ The role **never reboots by default** — a role that reboots when you did not a
 ./vms/up.sh && tests/kernel-reboot.sh
 ```
 
+or one distribution at a time, which is how it fits on a laptop — the four guests want about 10.7GB between them, and each has an entry point of its own that ends by printing its family's artifact:
+
+```bash
+./vms/up.sh kvm-suse && ansible-playbook -i inventory/kernel-vms.yml kernel-suse.yml
+```
+
+```bash
+tests/kernel-reboot.sh kvm-suse && ./vms/down.sh kvm-suse
+```
+
+`kernel-rhel.yml`, `kernel-ubuntu.yml`, `kernel-suse.yml` and `kernel-amazon.yml` each import `kernel.yml` with `kernel_target` set to one host, so the tuning has exactly one implementation and four doors into it.
+
 Four VMs booting the distributions' own public cloud images under QEMU with Hypervisor.framework — their own kernel, their own bootloader, so `reboot` means what it says. Before the reboot every managed argument is `PENDING`. After it, read back from `/proc/cmdline` **outside Ansible**:
 
 | VM | Mechanism | Active after the reboot | Independent evidence |

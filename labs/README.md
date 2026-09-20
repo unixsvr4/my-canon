@@ -34,12 +34,12 @@ The join between the labs is a **tag set** — `Environment`, `Role`, `Service`,
 | ansible-core | 2.21.4 (≥ 2.15 required) | labs 2 and 3 |
 | ansible-lint | 26.8.0 | `make check` only |
 | Docker | 29.4 | lab 2 (six AlmaLinux hosts + four distribution hosts); lab 3 artifact checks |
-| QEMU | 11.1.1 (`-accel hvf`, aarch64) | lab 2's reboot proof only — four real VMs; `make lab2-vms-up` |
+| QEMU | 11.1.1 (`-accel hvf`, aarch64) | lab 2's reboot proof only — four real VMs; `make lab2-vms-up`, or one at a time with `make lab2-vm-rhel` / `-ubuntu` / `-suse` / `-amazon` |
 | Python | 3.12+ (verified on 3.14) | labs 1, 2 and 3 scripts |
 
 ## Suggested order
 
-1. **Lab 2**: the richest. Role design, idempotence, safe rollouts, drift. About 45 minutes — plus 25 for the `kernel` role across four distributions, and 15 more if you want to watch four real kernels reboot (`make lab2-vms-up lab2-kernel-reboot`).
+1. **Lab 2**: the richest. Role design, idempotence, safe rollouts, drift. About 45 minutes — plus 25 for the `kernel` role across four distributions, and 15 more if you want to watch four real kernels reboot (`make lab2-vms-up lab2-kernel-reboot`). All four VMs want about 10.7GB of memory, so on a laptop take one at a time: `make lab2-vm-rhel`, then `make lab2-kernel-reboot VM=kvm-rhel`, then `make lab2-vms-down VM=kvm-rhel`.
 2. **Lab 1**: `for_each`, the module tests, and verifying live environments. About 50 minutes — then [`aws/`](lab1-terraform/aws/) for the real provider and what a mocked apply test can and cannot prove, about 30.
 3. **Lab 3**: the build pipeline, its cloud twin, and their validation. About 30 minutes.
 

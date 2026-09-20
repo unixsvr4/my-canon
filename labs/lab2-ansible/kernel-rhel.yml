@@ -1,0 +1,94 @@
+---
+# =============================================================================
+# kernel-rhel.yml - tune ONE host: the RHEL 9 family VM (AlmaLinux 9.4).
+#
+#   ./vms/up.sh kvm-rhel
+#   ansible-playbook -i inventory/kernel-vms.yml kernel-rhel.yml
+#   tests/kernel-reboot.sh kvm-rhel
+#   ./vms/down.sh kvm-rhel
+#
+# WHY FOUR PLAYBOOKS RATHER THAN ONE AND --limit
+#
+# `ansible-playbook kernel.yml --limit kvm-rhel` applies the same tuning, and
+# if that is all you want, use it. These four exist for two reasons.
+#
+# The first is memory. The four QEMU guests ask for 4096 + 2048 + 2048 + 2560
+# MiB, about 10.7GB, on a laptop that has 16GB and is also running a browser
+# and an IDE. One at a time is the difference between a demo and a swap storm,
+# and `./vms/up.sh kvm-rhel` plus this playbook is a lab that fits.
+#
+# The second is that the point of this role is that ONE interface reaches FOUR
+# different persistence mechanisms - and a --limit run does not show you which
+# one it used. Each of these four playbooks ends by printing the artifact its
+# own family's mechanism produced, which is the thing to put on screen.
+#
+# The tuning itself is not duplicated: this imports kernel.yml with
+# kernel_target set, so there is one copy of the pre_tasks, the role call and
+# the summary, and four entry points into it.
+#
+# THE MECHANISM HERE: BLS entries, rewritten by grubby.
+#
+# RHEL 9 boots from Boot Loader Specification entries in /boot/loader/entries,
+# one file per installed kernel, each with its own `options` line. grubby
+# rewrites those, so the change takes effect on the NEXT boot of an ALREADY
+# INSTALLED kernel. It does not touch what a kernel installed LATER will get -
+# that comes from GRUB_CMDLINE_LINUX in /etc/default/grub. The role writes
+# both, because writing only one is exactly how tuning disappears after a
+# `dnf update kernel`, which is the part tests/kernel-reboot.sh phase 4 exists
+# to prove.
+#
+# Profile: database - transparent huge pages off, a 1GB huge page reserved at
+# boot, and the shared-memory and dirty-page limits a database wants. This is
+# the VM with 4GB rather than 2GB, because a 2GB guest cannot find a gigabyte
+# of contiguous memory and the huge page ends up requested but not reserved.
+# =============================================================================
+
+- name: Tune the RHEL 9 family host
+  ansible.builtin.import_playbook: kernel.yml
+  vars:
+    kernel_target: kvm-rhel
+
+- name: Show what the RHEL mechanism produced
+  # The host name is from inventory/kernel-vms.yml. For any other inventory,
+  # use kernel.yml with --limit; this file is the local VM entry point.
+  hosts: kvm-rhel
+  gather_facts: false
+  become: true
+  tags: [evidence]
+
+  tasks:
+    # Read-only, so changed_when is false and check_mode is false - it should
+    # run under --check too, where it is the only output you get.
+    - name: Evidence | Read both halves of the RHEL mechanism
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "--- running kernel"
+          uname -r
+          echo "--- /proc/cmdline (what THIS boot got)"
+          cat /proc/cmdline
+          echo "--- grubby --info=DEFAULT (what the NEXT boot of this kernel gets)"
+          grubby --info=DEFAULT | grep -E '^(kernel|args)=' || echo "grubby not available"
+          echo "--- GRUB_CMDLINE_LINUX (what a kernel installed LATER inherits)"
+          grep -E '^GRUB_CMDLINE_LINUX=' /etc/default/grub || echo "not set"
+          echo "--- the ownership marker (what the role will remove if a profile drops it)"
+          grep -E '^# canon-kernel-managed:' /etc/default/grub || echo "no marker"
+        executable: /bin/bash
+      register: kernel_rhel_evidence
+      changed_when: false
+      check_mode: false
+
+    - name: Evidence | Print it
+      ansible.builtin.debug:
+        msg: "{{ kernel_rhel_evidence.stdout_lines }}"
+
+    # PENDING before a reboot is the correct answer, not a failure: grubby has
+    # written the next boot's arguments and this boot is still the old one.
+    # tests/kernel-reboot.sh kvm-rhel is what turns that into ACTIVE.
+    - name: Evidence | Say what is still waiting for a reboot
+      ansible.builtin.debug:
+        msg: >-
+          kvm-rhel: {{ kernel_report.cmdline_active | default('?') }} boot
+          argument(s) active, {{ kernel_report.cmdline_pending | default('?') }}
+          pending. Pending is correct here - run `tests/kernel-reboot.sh
+          kvm-rhel` to reboot into them and check again from outside Ansible.

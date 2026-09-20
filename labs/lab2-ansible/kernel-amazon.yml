@@ -1,0 +1,101 @@
+---
+# =============================================================================
+# kernel-amazon.yml - tune ONE host: Amazon Linux 2023.
+#
+#   ./vms/up.sh kvm-amazon
+#   ansible-playbook -i inventory/kernel-vms.yml kernel-amazon.yml
+#   tests/kernel-reboot.sh kvm-amazon
+#   ./vms/down.sh kvm-amazon
+#
+# One of four per-distribution entry points into kernel.yml. See the top of
+# kernel-rhel.yml for why there are four of these rather than one --limit.
+#
+# THE MECHANISM HERE: RHEL's, except for the two things that are not.
+#
+# Amazon Linux 2023 is a RHEL derivative. ansible_os_family reports RedHat, it
+# has BLS entries, it has grubby, and roles/kernel/vars/family-RedHat.yml is
+# loaded for it. Then vars/distro-Amazon.yml overrides the few things that
+# differ - the sysctl binary's path, the platform note, and the one that
+# matters here, kernel_grub_cmdline_key. Two facts drive that last override,
+# and neither is visible anywhere but a real AL2023 host (RESEARCH.md A31):
+#
+#   1. AL2023 populates GRUB_CMDLINE_LINUX_DEFAULT where RHEL 9 populates
+#      GRUB_CMDLINE_LINUX. The role wrote to the RHEL key, which AL2023's
+#      grub2-mkconfig ignores.
+#   2. `grubby --remove-args` BLANKS the whole of GRUB_CMDLINE_LINUX on this
+#      distribution. So the role wrote its arguments into the variable AL2023
+#      ignores, and then erased that variable with its own next task.
+#
+# The reboot test passed the entire time this was wrong, because grubby had
+# done its half of the job correctly and the running kernel booted with every
+# argument. The half being erased is the half that matters after the next
+# `dnf update kernel` - which is why phase 4 of tests/kernel-reboot.sh
+# installs a new kernel instead of trusting a reboot.
+#
+# That is what the evidence below prints: BOTH keys, so you can see which one
+# carries the arguments and that the other has not been blanked.
+#
+# THE PRODUCTION CAVEAT, which is the more useful half to talk about: on a
+# running instance in an Auto Scaling group, none of this survives. The next
+# instance refresh replaces the machine with one built from the AMI, and the
+# AMI has none of it. That is why inventory/group_vars/aws_ec2.yml sets
+# kernel_manage_bootloader: false - boot arguments belong in the image, built
+# by Image Builder with a reboot in the pipeline, with the no-reboot layers
+# applied by user data and enforced by SSM State Manager. This VM is
+# standalone, so managing the bootloader is correct HERE and wrong THERE, and
+# the role takes that as a variable rather than a guess.
+#
+# Profile: container-host - inotify limits, pid_max, ARP gc_thresh3 (the one
+# that bites a node with more than 1024 neighbours), br_netfilter loaded at
+# boot, cgroup v2 forced and psi=1 - plus a per-host kernel_sysctl_extra of
+# BBR congestion control.
+# =============================================================================
+
+- name: Tune the Amazon Linux host
+  ansible.builtin.import_playbook: kernel.yml
+  vars:
+    kernel_target: kvm-amazon
+
+- name: Show what the Amazon Linux mechanism produced
+  hosts: kvm-amazon
+  gather_facts: false
+  become: true
+  tags: [evidence]
+
+  tasks:
+    - name: Evidence | Read BOTH grub keys, and what grubby wrote
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "--- running kernel"
+          uname -r
+          echo "--- /proc/cmdline (what THIS boot got)"
+          cat /proc/cmdline
+          echo "--- grubby --info=DEFAULT (the BLS entry, rewritten in place)"
+          grubby --info=DEFAULT | grep -E '^(kernel|args)=' || echo "grubby not available"
+          echo "--- BOTH keys, named one at a time so an absent one SHOWS (A31)"
+          for k in GRUB_CMDLINE_LINUX GRUB_CMDLINE_LINUX_DEFAULT; do
+            grep -E "^$k=" /etc/default/grub || echo "$k  ABSENT - and on AL2023 that is the correct state"
+          done
+          echo "--- the ownership marker"
+          grep -E '^# canon-kernel-managed:' /etc/default/grub || echo "no marker"
+          echo "--- br_netfilter, loaded at boot rather than on first use"
+          lsmod | grep -E '^br_netfilter' || echo "not loaded"
+        executable: /bin/bash
+      register: kernel_amazon_evidence
+      changed_when: false
+      check_mode: false
+
+    - name: Evidence | Print it
+      ansible.builtin.debug:
+        msg: "{{ kernel_amazon_evidence.stdout_lines }}"
+
+    - name: Evidence | Say what is still waiting for a reboot
+      ansible.builtin.debug:
+        msg: >-
+          kvm-amazon: {{ kernel_report.cmdline_active | default('?') }} boot
+          argument(s) active, {{ kernel_report.cmdline_pending | default('?') }}
+          pending. On a standalone instance this is the whole story; in an Auto
+          Scaling group the AMI is, and kernel_manage_bootloader is false
+          there. Run `tests/kernel-reboot.sh kvm-amazon` to reboot and then
+          install a new kernel, which is the check that found A31.

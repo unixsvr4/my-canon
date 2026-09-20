@@ -1,0 +1,90 @@
+---
+# =============================================================================
+# kernel-suse.yml - tune ONE host: the SUSE family VM (openSUSE Leap 15.6).
+#
+#   ./vms/up.sh kvm-suse
+#   ansible-playbook -i inventory/kernel-vms.yml kernel-suse.yml
+#   tests/kernel-reboot.sh kvm-suse
+#   ./vms/down.sh kvm-suse
+#
+# One of four per-distribution entry points into kernel.yml. See the top of
+# kernel-rhel.yml for why there are four of these rather than one --limit.
+#
+# THE MECHANISM HERE: edit the file, then RUN THE GENERATOR yourself.
+#
+# SUSE is the family where writing the configuration file does nothing at all
+# on its own. There is no grubby to rewrite the boot entries, and no
+# update-grub wrapper that something else calls for you: /etc/default/grub is
+# an input to grub2-mkconfig, and until grub2-mkconfig -o /boot/grub2/grub.cfg
+# runs, /boot/grub2/grub.cfg still holds the old command line and the machine
+# still boots the old command line.
+#
+# A role that stopped at "the file has the right contents" would report
+# success here and change nothing. That is why the role carries
+# kernel_regenerate_cmd per family (empty on RHEL, update-grub on Debian,
+# grub2-mkconfig here) and why this playbook prints the GENERATED file rather
+# than the one the role edited - the generated file is the evidence.
+#
+# The variable name differs too: SUSE puts the arguments in
+# GRUB_CMDLINE_LINUX_DEFAULT, not GRUB_CMDLINE_LINUX. Three of these four
+# distributions disagree about that key, which is the whole reason it lives in
+# roles/kernel/vars/ per family instead of being written once in a template.
+#
+# Profile: low-latency - the profile with the most boot arguments, so the
+# generator has the most to prove. isolcpus, nohz_full and rcu_nocbs take the
+# isolated cores away from the scheduler, the timer tick and RCU callbacks;
+# none of the three has a runtime equivalent, which is the entire argument for
+# managing boot arguments at all. idle=poll is deliberately left OFF in
+# group_vars/kernel_vms.yml: on a real latency host it is the trade being made
+# on purpose, and in a guest it pins a host core at 100% for nothing.
+#
+# This host also pins ansible_python_interpreter to /usr/bin/python3.11:
+# Leap 15.6 ships python3 as 3.6.15, which ansible-core cannot run its modules
+# on (RESEARCH.md A18). ./vms/up.sh installs it before any play runs.
+# =============================================================================
+
+- name: Tune the SUSE family host
+  ansible.builtin.import_playbook: kernel.yml
+  vars:
+    kernel_target: kvm-suse
+
+- name: Show what the SUSE mechanism produced
+  hosts: kvm-suse
+  gather_facts: false
+  become: true
+  tags: [evidence]
+
+  tasks:
+    - name: Evidence | Read the input file AND the file the generator wrote
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "--- running kernel"
+          uname -r
+          echo "--- /proc/cmdline (what THIS boot got)"
+          cat /proc/cmdline
+          echo "--- /etc/default/grub: the INPUT, which changes nothing by itself"
+          grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || echo "not set"
+          echo "--- the ownership marker"
+          grep -E '^# canon-kernel-managed:' /etc/default/grub || echo "no marker"
+          echo "--- /boot/grub2/grub.cfg: the OUTPUT, and the proof grub2-mkconfig ran"
+          grep -m 2 -E '^[[:space:]]+linux[[:space:]]' /boot/grub2/grub.cfg 2>/dev/null || echo "no generated entry found"
+          echo "--- when the generated file was last written"
+          stat -c '%y %n' /boot/grub2/grub.cfg 2>/dev/null || echo "not present"
+        executable: /bin/bash
+      register: kernel_suse_evidence
+      changed_when: false
+      check_mode: false
+
+    - name: Evidence | Print it
+      ansible.builtin.debug:
+        msg: "{{ kernel_suse_evidence.stdout_lines }}"
+
+    - name: Evidence | Say what is still waiting for a reboot
+      ansible.builtin.debug:
+        msg: >-
+          kvm-suse: {{ kernel_report.cmdline_active | default('?') }} boot
+          argument(s) active, {{ kernel_report.cmdline_pending | default('?') }}
+          pending. If the INPUT file has the arguments and the OUTPUT file does
+          not, grub2-mkconfig did not run - that is the failure this family is
+          here to catch. Run `tests/kernel-reboot.sh kvm-suse` to reboot.

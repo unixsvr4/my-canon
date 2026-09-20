@@ -1,0 +1,88 @@
+---
+# =============================================================================
+# kernel-ubuntu.yml - tune ONE host: the Debian family VM (Ubuntu 24.04).
+#
+#   ./vms/up.sh kvm-ubuntu
+#   ansible-playbook -i inventory/kernel-vms.yml kernel-ubuntu.yml
+#   tests/kernel-reboot.sh kvm-ubuntu
+#   ./vms/down.sh kvm-ubuntu
+#
+# One of four per-distribution entry points into kernel.yml. The reasoning for
+# having four of them, rather than one playbook and --limit, is at the top of
+# kernel-rhel.yml; the short version is that these VMs want about 10.7GB
+# between them on a 16GB laptop, and that each family's mechanism is worth
+# putting on screen on its own.
+#
+# THE MECHANISM HERE: a drop-in file, and no generator to call by hand.
+#
+# There is no grubby on Ubuntu. /etc/default/grub is a shell fragment that
+# grub-mkconfig SOURCES, and since Ubuntu 18.04 it sources every file in
+# /etc/default/grub.d afterwards, in sort order. So the role writes
+# /etc/default/grub.d/99-canon-kernel.cfg and never edits the distribution's
+# own file at all.
+#
+# That is the right answer on this family for a reason the `99-` prefix hides:
+# Ubuntu's cloud images ship 50-cloudimg-settings.cfg, which sets
+# GRUB_CMDLINE_LINUX_DEFAULT itself. A file that sorts BEFORE it is silently
+# overwritten by it, and the tuning is gone with every task reporting ok. The
+# same trap as the sshd drop-in the baseline role hit on AlmaLinux 9: last one
+# wins, and being correct earlier in the sequence is worth nothing.
+#
+# The drop-in is a self-filtering POSIX sh snippet rather than a static
+# assignment - see roles/kernel/templates/grub-dropin.cfg.j2. It removes the
+# keys the role owns from whatever the earlier files set and then appends this
+# profile's values, which is what makes REMOVING a setting work: drop it from
+# the profile and the next run stops appending it.
+#
+# Profile: throughput - network queue depths, congestion control, and a
+# per-host kernel_cmdline_extra of transparent_hugepage=madvise, because the
+# throughput profile has no boot arguments of its own and a host with nothing
+# to persist proves nothing about persistence.
+# =============================================================================
+
+- name: Tune the Debian family host
+  ansible.builtin.import_playbook: kernel.yml
+  vars:
+    kernel_target: kvm-ubuntu
+
+- name: Show what the Debian mechanism produced
+  hosts: kvm-ubuntu
+  gather_facts: false
+  become: true
+  tags: [evidence]
+
+  tasks:
+    - name: Evidence | Read the drop-in, its neighbours, and the generated config
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          echo "--- running kernel"
+          uname -r
+          echo "--- /proc/cmdline (what THIS boot got)"
+          cat /proc/cmdline
+          echo "--- /etc/default/grub.d, in the order grub-mkconfig sources it"
+          ls -1 /etc/default/grub.d/ 2>/dev/null || echo "no drop-in directory"
+          echo "--- 99-canon-kernel.cfg, comments stripped (sorts last, so it wins)"
+          grep -vE '^[[:space:]]*#|^[[:space:]]*$' /etc/default/grub.d/99-canon-kernel.cfg 2>/dev/null || echo "not written"
+          echo "--- the generated grub.cfg, which is what the machine actually boots"
+          grep -m 2 -E '^[[:space:]]+linux[[:space:]]' /boot/grub/grub.cfg 2>/dev/null || echo "no generated entry found"
+        executable: /bin/bash
+      register: kernel_ubuntu_evidence
+      changed_when: false
+      check_mode: false
+
+    - name: Evidence | Print it
+      ansible.builtin.debug:
+        msg: "{{ kernel_ubuntu_evidence.stdout_lines }}"
+
+    # The drop-in is a script, so reading it does not tell you what value the
+    # kernel will actually get - only running grub-mkconfig does, and the role
+    # already ran update-grub. That is why the generated grub.cfg line above is
+    # in this output: it is the resolved answer, not the recipe.
+    - name: Evidence | Say what is still waiting for a reboot
+      ansible.builtin.debug:
+        msg: >-
+          kvm-ubuntu: {{ kernel_report.cmdline_active | default('?') }} boot
+          argument(s) active, {{ kernel_report.cmdline_pending | default('?') }}
+          pending. Run `tests/kernel-reboot.sh kvm-ubuntu` to reboot into them
+          and check again from outside Ansible.

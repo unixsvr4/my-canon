@@ -36,6 +36,7 @@ unexport TF_LOG TF_LOG_PATH
         lab2-static lab2-up lab2-test lab2-idempotence-demo lab2-patch-demo lab2-drift-demo lab2-down \
         lab2-distros-up lab2-kernel-test lab2-kernel-demo lab2-distros-down \
         lab2-vms-up lab2-kernel-reboot lab2-vms-down \
+        lab2-vm-rhel lab2-vm-ubuntu lab2-vm-suse lab2-vm-amazon \
         lab3-static lab3-test lab3-artifacts clean
 
 help: ## List targets
@@ -123,6 +124,11 @@ lab2-static: ## ansible-lint (production profile) + syntax checks
 	cd $(LAB2) && ansible-lint
 	cd $(LAB2) && for p in site.yml patch.yml kernel.yml examples/idempotence/idempotent.yml examples/idempotence/not-idempotent.yml; do \
 	  ansible-playbook --syntax-check $$p >/dev/null || exit 1; echo "syntax ok: $$p"; done
+	@# The four per-distribution playbooks name one host each, so they are
+	@# syntax-checked against the inventory that defines those hosts - without
+	@# it the check passes on a warning about a pattern that matched nothing.
+	cd $(LAB2) && for p in kernel-rhel.yml kernel-ubuntu.yml kernel-suse.yml kernel-amazon.yml; do \
+	  ansible-playbook -i inventory/kernel-vms.yml --syntax-check $$p >/dev/null || exit 1; echo "syntax ok: $$p"; done
 	@# The EC2 dynamic inventory needs credentials to LIST hosts, but parsing it
 	@# needs only the collection - so CI can still prove the plugin is installed
 	@# and the config is valid YAML the plugin accepts.
@@ -182,14 +188,44 @@ lab2-distros-down: ## Remove the four distribution containers
 # and install a new kernel in each, which takes about 15 minutes and a few GB of
 # downloaded images - too slow for a commit gate, and the only way to test the
 # one claim containers cannot make.
+#
+# VM= narrows all three to a single guest:  make lab2-vms-up VM=kvm-suse
+VM ?=
+
 lab2-vms-up: ## Boot four real VMs (own kernel, own bootloader) for the kernel role
-	cd $(LAB2) && ./vms/up.sh
+	cd $(LAB2) && ./vms/up.sh $(VM)
 
 lab2-kernel-reboot: ## THE reboot proof on real kernels: apply, reboot, verify, upgrade the kernel, re-apply (about 15 min)
-	cd $(LAB2) && tests/kernel-reboot.sh
+	cd $(LAB2) && tests/kernel-reboot.sh $(VM)
 
 lab2-vms-down: ## Shut the VMs down and delete their disks
-	cd $(LAB2) && ./vms/down.sh --clean
+	cd $(LAB2) && ./vms/down.sh --clean $(VM)
+
+# --- Lab 2: one real VM at a time ----------------------------------------------
+#
+# The four guests want about 10.7GB of memory between them, which does not fit
+# beside a browser and an IDE on a 16GB laptop. Each of these boots ONE VM and
+# tunes it with its own playbook, which then prints the artifact that family's
+# mechanism produced - the RHEL BLS entry, Ubuntu's drop-in, the file SUSE's
+# generator wrote, both of Amazon Linux's grub keys.
+#
+# Then, per VM:  make lab2-kernel-reboot VM=kvm-rhel
+#                make lab2-vms-down      VM=kvm-rhel
+lab2-vm-rhel: ## One VM: AlmaLinux 9, database profile, BLS entries + grubby
+	cd $(LAB2) && ./vms/up.sh kvm-rhel
+	cd $(LAB2) && ansible-playbook -i inventory/kernel-vms.yml kernel-rhel.yml
+
+lab2-vm-ubuntu: ## One VM: Ubuntu 24.04, throughput profile, /etc/default/grub.d drop-in
+	cd $(LAB2) && ./vms/up.sh kvm-ubuntu
+	cd $(LAB2) && ansible-playbook -i inventory/kernel-vms.yml kernel-ubuntu.yml
+
+lab2-vm-suse: ## One VM: openSUSE Leap 15.6, low-latency profile, grub2-mkconfig
+	cd $(LAB2) && ./vms/up.sh kvm-suse
+	cd $(LAB2) && ansible-playbook -i inventory/kernel-vms.yml kernel-suse.yml
+
+lab2-vm-amazon: ## One VM: Amazon Linux 2023, container-host profile, the AL2023 grub key
+	cd $(LAB2) && ./vms/up.sh kvm-amazon
+	cd $(LAB2) && ansible-playbook -i inventory/kernel-vms.yml kernel-amazon.yml
 
 lab2-down: ## Remove the lab containers
 	cd $(LAB2) && ./teardown.sh

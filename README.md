@@ -9,6 +9,16 @@ make ci      # ~25s, no Docker, no cloud account: lint, validate, 38 terraform t
 make all     # + apply/verify/tamper/destroy both Terraform envs; Docker: 6 hosts converged, idempotence, drift, rolling patch, kernel tuning on 4 distributions, real parsers
 ```
 
+**Kernel tuning that survives a reboot** has its own entry point, because it needs a real kernel rather than a container — one QEMU virtual machine on a Mac, per distribution, free:
+
+```bash
+make lab2-vm-rhel                        # boot AlmaLinux 9 under QEMU and tune its kernel
+make lab2-kernel-reboot VM=kvm-rhel      # reboot it, verify from outside Ansible, install a NEW kernel, re-apply
+make lab2-vms-down     VM=kvm-rhel       # give the memory back
+```
+
+`lab2-vm-ubuntu`, `lab2-vm-suse` and `lab2-vm-amazon` are the other three. Each boots one VM, applies the role through that distribution's own playbook, and prints the artifact its family's mechanism produced — a BLS entry, a `/etc/default/grub.d` drop-in, the file `grub2-mkconfig` generated, or Amazon Linux's other grub key. `make lab2-vms-up` boots all four at once, which needs about 10.7GB of memory.
+
 ---
 
 ## What is here

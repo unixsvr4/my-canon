@@ -7,6 +7,14 @@
 #   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml --tags kernel_bootloader
 #   ansible-playbook -i inventory/kernel-hosts.yml kernel.yml -e kernel_reboot_ok=true
 #
+# ONE VM AT A TIME (a different thing from `serial`, below): the four
+# per-distribution playbooks - kernel-rhel.yml, kernel-ubuntu.yml,
+# kernel-suse.yml, kernel-amazon.yml - each import THIS playbook with
+# kernel_target set to their host, so there is one copy of the logic and four
+# entry points into it, and then print the artifact their own family's
+# mechanism produced. The four QEMU guests want about 10.7GB of memory between
+# them, so booting one at a time is what makes this lab fit on a laptop.
+#
 # Four hosts, four distributions, four different workload profiles, one role.
 # The playbook is deliberately short: every per-host difference is data in
 # inventory/kernel-hosts.yml, which is what makes the role reusable.
@@ -18,7 +26,11 @@
 # =============================================================================
 
 - name: Apply reboot-persistent kernel tuning
-  hosts: kernel_tuned
+  # The default is the whole group; the per-distribution playbooks import this
+  # file with kernel_target set to a single host. A host pattern is templated
+  # from play vars, which is what lets one playbook be four entry points
+  # without a second copy of the pre_tasks, the role call or the summary.
+  hosts: "{{ kernel_target | default('kernel_tuned') }}"
   gather_facts: true
   serial: 1
   max_fail_percentage: 0
