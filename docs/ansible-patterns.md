@@ -40,6 +40,7 @@ A role is reusable when it can be dropped into a new estate and configured entir
 - **`validate:` on files that can lock you out**: `sshd -t -f %s`, `visudo -cf %s`. The candidate file is checked before it replaces the real one.
 - **Verify the effective configuration.** A file with correct content can still be overridden: AlmaLinux 9 ships an sshd drop-in that sets `PermitRootLogin yes` and sorts before a `50-` or `99-` hardening file, and the first value wins. Asserting on `sshd -T` catches it; asserting on the file doesn't.
 - **Flush handlers before verification**, so the check sees the reloaded service.
+- **A handler covers a changed *file*, not a changed *machine*.** A hand-run `sysctl -w` leaves the file correct, so nothing is notified and nothing reloads — the converge reports drift it was perfectly able to fix. Verify against the running state, and when it differs, reapply from the *whole* configuration (`sysctl --system`, not `sysctl -p ourfile`) and re-read: drift is corrected, and a file that legitimately overrides yours still wins, so the failure that remains is the real one.
 - **Skip verification in check mode.** Nothing was converged, so it would fail on every drifted host.
 
 ## 4. Inventory

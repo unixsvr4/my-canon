@@ -14,7 +14,7 @@ Six throwaway containers stand in for six servers. No VMs, no SSH keys, no cost.
 | A **safe rolling patch**: canary, batches, abort, quarantine, retry | `patch.yml`, `roles/patch/` | run stops after 3 hosts; retry touches only failures |
 | **Drift detection** with an exit code and a record that survives the fix | `drift-check.sh`, `drift-show.py` | exit 2 on drift, 0 after remediation, record kept |
 | **Kernel tuning that survives a reboot** on RHEL, Ubuntu, SUSE and Amazon Linux | `roles/kernel/` | `tests/kernel-multidistro.sh` — 4 distributions, 4 mechanisms, 20 artifact assertions, 0 changes on run 2 |
-| ...and it really does survive one | `vms/`, `tests/kernel-reboot.sh` | 4 **real VMs** rebooted; every argument live in `/proc/cmdline`, THP actually off, then a **kernel upgrade** and a re-apply |
+| ...and it really does survive one | `vms/`, `tests/kernel-reboot.sh` | 4 **real VMs** rebooted; every argument live in `/proc/cmdline`, THP actually off, hand-made `sysctl -w` drift repaired by the next converge, then a **kernel upgrade** and a re-apply |
 | The same role on **real EC2** | `aws/` | 4 instances, one per family, profile driven by the `KernelProfile` tag (validated and scanned; applying costs about 0.07 USD/hour) |
 | Declarative **removal** of a boot argument, not just addition | `roles/kernel/tasks/bootloader-file.yml` | `tests/kernel-contract.sh` — vendor arguments preserved, stale values gone, no key twice |
 | The same fleet on **AWS**: inventory from tags, access without SSH | `inventory/aws_ec2.yml`, `inventory/group_vars/aws_ec2.yml` | `make lab2-static` parses the plugin config; groups match lab 3's rendered tag contract |
@@ -285,14 +285,18 @@ tests/kernel-reboot.sh kvm-suse
 
 `make lab2-vm-suse` does the first two together; `make lab2-kernel-reboot VM=kvm-suse` and `make lab2-vms-down VM=kvm-suse` do the rest.
 
+`down.sh` keeps the disk, so booting that VM again **resumes** it — about 13 seconds, already tuned, which is what makes stopping one between sessions cheap. `./vms/down.sh --clean kvm-suse` throws the disk away instead and the next boot starts from the distribution's untouched image. That resume path is also where `RESEARCH.md` A40 was hiding: `up.sh` used to wait, on every boot, for a cloud-init sentinel that cloud-init only ever writes once.
+
 Measured this way, one VM at a time, with nothing else booted:
 
-| VM | Applied | Rebooted | Independently checked |
-|---|---|---|---|
-| `kvm-ubuntu` | `ok=39 changed=8` | 3 checks pass | THP `always [madvise] never`; the drop-in beat `50-cloudimg-settings.cfg` |
-| `kvm-suse` | `ok=42 changed=8` | 4 checks pass | 8 arguments pending → active; `grub.cfg` written by `grub2-mkconfig` at the timestamp the evidence prints |
-| `kvm-amazon` | `ok=45 changed=9` | 3 checks pass | `GRUB_CMDLINE_LINUX` **absent**, `_DEFAULT` carrying all three arguments — A31, on screen |
-| `kvm-rhel` | `ok=43 changed=8` | 8 checks pass, including the kernel upgrade | 5.14.0-427 (9.4) → **5.14.0-687** (9.8), every managed argument inherited, 1GB huge page actually reserved |
+| VM | Applied | Rebooted | Drift repaired (phase 3b) | Independently checked |
+|---|---|---|---|---|
+| `kvm-ubuntu` | `ok=40 changed=8` | 5 checks pass | `net.core.somaxconn` 65535 → 65536 by hand, put back | THP `always [madvise] never`; the drop-in beat `50-cloudimg-settings.cfg` |
+| `kvm-suse` | `ok=43 changed=8` | 6 checks pass | `vm.stat_interval` 120 → 121 by hand, put back | 8 arguments pending → active; `grub.cfg` written by `grub2-mkconfig` at the timestamp the evidence prints |
+| `kvm-amazon` | `ok=46 changed=9` | 5 checks pass | `vm.max_map_count` 262144 → 262145 by hand, put back | `GRUB_CMDLINE_LINUX` **absent**, `_DEFAULT` carrying all three arguments — A31, on screen |
+| `kvm-rhel` | `ok=44 changed=8` | 10 checks pass, including the kernel upgrade | `vm.swappiness` 1 → 2 by hand, put back | 5.14.0-427 (9.4) → **5.14.0-687** (9.8), every managed argument inherited, 1GB huge page actually reserved |
+
+Each host drifts a *different* key, because the four profiles share almost nothing — phase 3b picks one out of the file the role actually wrote on that host rather than naming one in advance.
 
 Only the RHEL run included phase 4. `SKIP_UPGRADE=1` skips it, and the summary then says so rather than claiming a result it did not produce — it used to claim it (`RESEARCH.md` A36).
 
@@ -310,7 +314,7 @@ Four QEMU virtual machines booting the distributions' own public cloud images un
 tests/kernel-reboot.sh
 ```
 
-Four phases: **apply** (arguments written, reported `PENDING` — correct, and not yet proof of anything), **reboot** (the role reboots, re-reads `/proc/cmdline`, and the test then verifies it again from outside Ansible), **re-apply** (`changed=0` against a live, tuned kernel), and **a new kernel** (install one, boot into it, observe what survived, re-apply, require every argument active).
+Five phases: **apply** (arguments written, reported `PENDING` — correct, and not yet proof of anything), **reboot** (the role reboots, re-reads `/proc/cmdline`, and the test then verifies it again from outside Ansible), **re-apply** (`changed=0` against a live, tuned kernel), **runtime drift** (change a sysctl by hand with `sysctl -w`, leaving the file correct, and require the next converge to *put it back* rather than merely report it — `RESEARCH.md` A39), and **a new kernel** (install one, boot into it, observe what survived, re-apply, require every argument active).
 
 What comes back after the reboot:
 

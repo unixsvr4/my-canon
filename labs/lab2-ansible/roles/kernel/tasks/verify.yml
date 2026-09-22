@@ -33,7 +33,58 @@
   ansible.builtin.debug:
     msg: "{{ kernel_state.stdout_lines | reject('match', '^SUMMARY ') | list }}"
 
-# A runtime parameter that was written, loaded, and is still not the running
+# --- RUNTIME DRIFT: repair it, then judge it ---------------------------------
+#
+# The handler reloads sysctl when the FILE changes. That covers a first run and
+# an edited profile, and it does not cover the most ordinary drift there is:
+# someone ran `sysctl -w` during an incident, or a container runtime set a key,
+# and the file on disk was right the whole time. Nothing changed, so nothing
+# was notified, so the running kernel kept the tampered value and the role
+# failed with a message about drop-in ordering that had nothing to do with it
+# (RESEARCH.md A39).
+#
+# Reloading HERE, and only when the collected state actually differs, keeps
+# both properties:
+#
+#   - a converged host still reports changed=0, because this never fires
+#   - `sysctl -w` drift is corrected by the converge, which is what a
+#     configuration management run is for
+#
+# It cannot paper over a real override, and that is the point of using
+# `kernel_sysctl_apply_cmd` (`sysctl --system`) rather than `sysctl -p` on our
+# own file: --system replays every drop-in in the real read order, so a file
+# that legitimately sorts after ours wins again and the assert below still
+# fails. The reload distinguishes the two causes instead of guessing between
+# them - it repairs what a converge can repair, and leaves what it cannot.
+#
+# The condition is a FACT rather than `when: <the reload task> is changed`, and
+# that is not only to satisfy ansible-lint's no-handler rule. The three tasks
+# below are one decision - "this host has drifted" - taken once, from the
+# collected state, and read three times. Gating them on the previous task's
+# result would instead make each one depend on the one above it.
+- name: Verify | Decide whether the running kernel has drifted from the file
+  ansible.builtin.set_fact:
+    kernel_sysctl_drifted: >-
+      {{ (kernel_sysctl_apply | bool) and (kernel_report.sysctl_differs | int > 0) }}
+
+- name: Verify | Reload sysctl because the running kernel has drifted
+  ansible.builtin.command:
+    cmd: "{{ kernel_sysctl_apply_cmd }}"
+  changed_when: true
+  when: kernel_sysctl_drifted | bool
+
+# Re-collect, so the assert below - and the play's own summary - describe the
+# kernel as it is after the reload rather than before it. Same reason as A28.
+- name: Verify | Re-read the running kernel state after the reload
+  ansible.builtin.include_tasks: verify-collect.yml
+  when: kernel_sysctl_drifted | bool
+
+- name: Verify | The running kernel after the sysctl reload
+  ansible.builtin.debug:
+    msg: "{{ kernel_state.stdout_lines | reject('match', '^SUMMARY ') | list }}"
+  when: kernel_sysctl_drifted | bool
+
+# A runtime parameter that was written, RELOADED, and is still not the running
 # value means something else owns that key: another drop-in sorting later than
 # ours, a systemd unit, or a container runtime. That is a real failure, and it
 # is exactly the class of bug the baseline role's `sshd -T` check exists for.
@@ -43,11 +94,14 @@
       - kernel_report.sysctl_differs | int == 0
     fail_msg: >-
       {{ kernel_report.sysctl_differs }} runtime parameter(s) were written to
-      {{ kernel_sysctl_file }} and loaded, and the kernel is still running a
-      different value. Something later in sysctl's read order is overriding
-      them - check `sysctl --system` output and
-      /etc/sysctl.d, /run/sysctl.d, /usr/lib/sysctl.d for a file that sorts
-      after {{ kernel_sysctl_file | basename }}. Details in the report above.
+      {{ kernel_sysctl_file }}, `{{ kernel_sysctl_apply_cmd }}` was then run
+      again, and the kernel is STILL running a different value. Runtime drift
+      would have been corrected by that reload, so this is not drift:
+      something later in sysctl's read order owns the key. Check
+      /etc/sysctl.d, /run/sysctl.d, /usr/local/lib/sysctl.d and
+      /usr/lib/sysctl.d for a file that sorts after
+      {{ kernel_sysctl_file | basename }}, and a systemd unit or container
+      runtime that sets it. Details in the report above.
     success_msg: >-
       {{ kernel_report.sysctl_ok }} runtime parameter(s) loaded and running
     quiet: true

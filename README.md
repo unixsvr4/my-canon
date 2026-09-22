@@ -13,7 +13,7 @@ make all     # + apply/verify/tamper/destroy both Terraform envs; Docker: 6 host
 
 ```bash
 make lab2-vm-rhel                        # boot AlmaLinux 9 under QEMU and tune its kernel
-make lab2-kernel-reboot VM=kvm-rhel      # reboot it, verify from outside Ansible, install a NEW kernel, re-apply
+make lab2-kernel-reboot VM=kvm-rhel      # reboot it, verify from outside Ansible, drift a sysctl by hand, install a NEW kernel, re-apply
 make lab2-vms-down     VM=kvm-rhel       # give the memory back
 ```
 

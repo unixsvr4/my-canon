@@ -152,7 +152,7 @@ Every task can succeed while the kernel runs something else. `tasks/verify.yml` 
 |---|---|---|
 | `active` | configured and running now | fine |
 | `PENDING` | configured, needs a reboot | a **report** — the reboot is a scheduling decision |
-| `DIFFERS` | loadable at runtime, written, loaded, and still not the running value | a **failure** — something later in sysctl's read order is overriding it |
+| `DIFFERS` | loadable at runtime, written, and not the running value | first **repaired**, then a **failure** if it survives the repair — see below |
 
 ```text
 CMDLINE  PENDING  transparent_hugepage=never  (reboot required)
@@ -165,6 +165,13 @@ THP      state    always [madvise] never
 
 This is the same idea as lab 1's `verify-env.py`: "the apply succeeded" and "the environment is correct" are two different claims. Here they are "the files are right" and "the kernel is running it".
 
+`DIFFERS` has two causes that look identical in the report and need opposite answers, so the role separates them by acting rather than by guessing. If the collected state differs, it runs `sysctl --system` and re-reads:
+
+- someone ran **`sysctl -w`** during an incident and the file on disk was right the whole time. The reload corrects it, the run reports `changed`, and that is what a converge is for. Nothing on disk changed, so the write task reported no change and the reload handler was never notified — which is exactly why this cannot be left to the handler (`RESEARCH.md` A39)
+- a **drop-in that sorts after ours**, a systemd unit or a container runtime genuinely owns that key. `sysctl --system` replays every file in the real read order, so the other file wins again, the value is still wrong, and the assert fails naming the real cause
+
+The reload is gated on the collected state, so it cannot fire on a converged host and idempotence is intact.
+
 The role **never reboots by default** — a role that reboots when you did not ask is a role nobody runs on a Friday. `kernel_reboot_ok: true` allows it, and then a second check confirms the arguments really are in `/proc/cmdline` afterwards, because "we rebooted" is not the same as "it is active".
 
 ## Proving it three ways
@@ -174,7 +181,7 @@ The role **never reboots by default** — a role that reboots when you did not a
 | Rung | Proves | Cost | Time |
 |---|---|---|---|
 | **4 containers** — `tests/kernel-multidistro.sh` | the right file, in the right place, on four distributions; and idempotence | none | about 40s |
-| **4 QEMU VMs** — `tests/kernel-reboot.sh` | a real kernel **boots with those arguments**, survives a reboot, and a re-apply puts them on a **newly installed kernel** | none | about 15 min |
+| **4 QEMU VMs** — `tests/kernel-reboot.sh` | a real kernel **boots with those arguments**, survives a reboot, has its **runtime drift repaired** by a converge, and carries the tuning onto a **newly installed kernel** | none | about 15 min |
 | **4 EC2 instances** — [`../../aws/`](../../aws/) | the same, on the hardware and the AMIs that run the workload | about 0.07 USD/hour | about 20 min |
 
 ### The reboot, measured
@@ -208,13 +215,15 @@ Four VMs booting the distributions' own public cloud images under QEMU with Hype
 
 ### What rebooting for real found
 
-Three bugs that the container tests could not have caught, all now in [`RESEARCH.md`](../../../../RESEARCH.md):
+Bugs that the container tests could not have caught, all now in [`RESEARCH.md`](../../../../RESEARCH.md):
 
 - **The strict sysctl check ran too early** (A27). It was in `validate.yml`, which runs *before* `modules.yml` — and `net.netfilter.nf_conntrack_max` does not exist until `nf_conntrack` is loaded. The ordering comment in `tasks/main.yml` says modules must come first *for exactly that reason*, and the check enforcing it was itself jumping the queue. It now lives in `sysctl.yml`.
 - **The role was not idempotent on the RHEL family** (A30). The grubby task was written `changed_when: true`, so every run reported a change on every RHEL-family host — the exact anti-pattern [`examples/idempotence/`](../../examples/idempotence/) exists to demonstrate, in this repository's own role. It now compares the boot entry's argument set before and after.
 - **Amazon Linux was writing to the wrong variable, and then wiping it** (A31, above).
 - **The report was stale** (A28). The role collected the state, rebooted, and then printed the numbers from *before* the reboot — `boot_args_pending=4` about a host that had just come back with all four active. The collection is now `verify-collect.yml` and runs twice.
 - **`hugepages=1` was active with zero pages reserved.** A hugepage count is a *request*: the kernel reserves what it can find contiguously at boot and carries on with less. `/proc/cmdline` still shows the argument, so a check that stops at "is it active?" reports success while the database gets small pages. The verifier now compares the request with `/sys/kernel/mm/hugepages/.../nr_hugepages` and fails on a shortfall.
+
+- **Drift was detected and not repaired** (A39). Two sysctls changed by hand with `sysctl -w` made the next converge *fail* rather than fix them, blaming a drop-in ordering problem that did not exist — because the file was already correct, so nothing was notified and nothing was reloaded. A converge that reports drift it could have corrected is doing half the job, and naming the wrong cause is worse than reporting nothing.
 
 That last one is the pattern this whole role is built around, one level deeper than usual: **the file was right, the argument was active, and the thing it was for still had not happened.**
 

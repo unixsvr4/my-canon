@@ -274,6 +274,75 @@ sys.exit(1 if changed else 0)
 PY
 [ $? -eq 0 ] && pass=$((pass + 1)) || fail=$((fail + 1))
 
+# --- phase 3b: runtime drift -------------------------------------------------
+#
+# Phase 3 proves a converge against a correct host changes nothing. This proves
+# the opposite direction, which is the one that actually happens at 2am: the
+# FILE is still right and the RUNNING kernel is not, because someone ran
+# `sysctl -w`. Nothing has changed on disk, so the template reports no change
+# and the reload handler is never notified - the role used to detect that and
+# fail, blaming a drop-in ordering problem that did not exist (RESEARCH.md
+# A39). A converge is supposed to correct drift, not just report it.
+#
+# The key to tamper with is chosen PER HOST from the file the role wrote,
+# because the four profiles share almost nothing: an earlier version of this
+# phase hardcoded vm.swappiness, which only the database profile sets, so it
+# printed "nothing to drift" on three hosts out of four and tested one. Every
+# candidate below is a plain integer, is harmless at a wrong value for the
+# seconds this takes, and belongs to a different profile from its neighbours:
+#
+#   vm.swappiness                  database
+#   net.core.somaxconn             throughput
+#   vm.stat_interval               low-latency
+#   vm.max_map_count               container-host (and database)
+#   fs.inotify.max_user_watches    container-host
+DRIFT_CANDIDATES="vm.swappiness net.core.somaxconn vm.stat_interval vm.max_map_count fs.inotify.max_user_watches"
+
+echo
+echo "== phase 3b: runtime drift. A hand-run \`sysctl -w\` is corrected, not just reported"
+drift_hosts=()
+for entry in "${TARGETS[@]}"; do
+  name=$(field "$entry" 1)
+  key=""; want=""
+  for k in $DRIFT_CANDIDATES; do
+    v=$(on "$entry" "sudo sed -n 's/^${k//./\\.} *= *//p' /etc/sysctl.d/90-canon-kernel.conf 2>/dev/null")
+    case "$v" in ''|*[!0-9]*) continue ;; esac
+    key="$k"; want="$v"; break
+  done
+  if [ -z "$key" ]; then
+    echo "   FAIL  $name: no integer sysctl to tamper with - this phase would test nothing"
+    fail=$((fail + 1))
+    continue
+  fi
+  tampered=$((want + 1))
+  on "$entry" "sudo sysctl -w $key=$tampered >/dev/null"
+  got=$(on "$entry" "sudo sysctl -n $key")
+  # A tamper that did not land would make the check below pass for the wrong
+  # reason - the same trap tamper.sh guards against in the container lab.
+  if [ "$got" != "$tampered" ]; then
+    echo "   FAIL  $name: could not tamper with $key (wanted $tampered, got $got)"
+    fail=$((fail + 1))
+    continue
+  fi
+  echo "   $name    $key $want -> $tampered by hand, file untouched"
+  drift_hosts+=("$entry|$key|$want")
+done
+
+if [ ${#drift_hosts[@]} -gt 0 ]; then
+  ANSIBLE_RETRY_FILES_ENABLED=false \
+    ansible-playbook -i "$INV" kernel.yml --limit "$LIMIT" > "$OUT/phase3b.log" 2>&1
+  rc=$?
+  check "the converge succeeded against $((${#drift_hosts[@]})) drifted host(s) (exit $rc)" "[ $rc -eq 0 ]"
+  for d in "${drift_hosts[@]}"; do
+    entry="${d%|*|*}"
+    name=$(field "$entry" 1)
+    kw="${d#"$entry|"}"; key="${kw%|*}"; want="${kw#*|}"
+    now=$(on "$entry" "sudo sysctl -n $key")
+    check "$name: the converge put $key back to $want (running $now)" \
+          "[ \"$now\" = \"$want\" ]"
+  done
+fi
+
 # --- phase 4: a new kernel ---------------------------------------------------
 if [ "${SKIP_UPGRADE:-0}" = "1" ]; then
   echo

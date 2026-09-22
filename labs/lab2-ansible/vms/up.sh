@@ -139,9 +139,14 @@ boot_one() {
   # is a no-op (and refused, harmlessly) on an image that is already bigger.
   # An earlier version parsed the size out of `qemu-img info` and got it
   # wrong, which is the same bug again with more code.
+  #
+  # Whether the overlay is NEW matters later: cloud-init provisions a disk
+  # exactly once, so a reused one is already provisioned and waiting for a
+  # first-boot signal on it waits forever (RESEARCH.md A40).
   if [ ! -f "$disk" ]; then
     qemu-img create -q -f qcow2 -F qcow2 -b "$base" "$disk"
     qemu-img resize -q "$disk" 20G 2>/dev/null || true
+    FRESH_DISKS="$FRESH_DISKS $name"
   fi
 
   # --- cloud-init NoCloud seed ----------------------------------------------
@@ -273,9 +278,25 @@ remote() {
 # So the wait is for the SENTINEL that the seed writes as its LAST runcmd step,
 # which is the same idea as the health gate in patch.yml: wait for the thing
 # that means "finished", not for the first sign of life.
+#
+# ...ON A FIRST BOOT, and only then. cloud-init provisions a disk ONCE: it
+# records the instance-id under /var/lib/cloud and skips `runcmd` ever after,
+# and the sentinel lives in /run, which is tmpfs. So on any later boot of the
+# same overlay - which is what `down.sh` (no --clean) followed by `up.sh` gives
+# you, the exact shape of the one-VM-at-a-time workflow - cloud-init correctly
+# does nothing, the sentinel is correctly absent, and waiting for it hangs for
+# ten minutes and then says "cloud-init never finished" about a machine that
+# finished days ago (RESEARCH.md A40).
+#
+# A reused disk needs no cloud-init wait, because the provisioning it would be
+# waiting for is already on the disk. What it does still need is proof that the
+# provisioning WORKED, and that has its own check on every boot, fresh or not:
+# ensure_interpreter, immediately below this.
 wait_ready() {
   local name="$1" port="$2" tries=0
   local ssh_ok=0
+  local first_boot=0
+  case " $FRESH_DISKS " in *" $name "*) first_boot=1 ;; esac
   while [ $tries -lt 200 ]; do
     if [ $ssh_ok -eq 0 ]; then
       if ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no \
@@ -283,6 +304,10 @@ wait_ready() {
              -i "$KEY" -p "$port" canon@127.0.0.1 true 2>/dev/null; then
         ssh_ok=1
         printf 'ssh'
+        if [ $first_boot -eq 0 ]; then
+          printf ' + disk already provisioned'
+          return 0
+        fi
       fi
     else
       if remote "$port" 'test -f /run/canon-ready'; then
@@ -299,6 +324,10 @@ wait_ready() {
   echo "       ssh worked: $ssh_ok (0 means it never came up; 1 means cloud-init never finished)"
   return 1
 }
+
+# Overlays created by THIS run, as opposed to reused from an earlier one - see
+# wait_ready.
+FRESH_DISKS=""
 
 WANTED=("$@")
 
