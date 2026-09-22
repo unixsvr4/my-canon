@@ -24,7 +24,7 @@ variable "environment" {
 variable "github_subjects" {
   description = "OIDC subjects allowed to assume the CI role. Pin the repository AND the ref; a bare repo:owner/name:* lets any branch or fork PR in."
   type        = list(string)
-  default     = ["repo:unixsvr4/my-canon:ref:refs/heads/main"]
+  default     = ["repo:unixsvr4/my-canon-kernel:ref:refs/heads/main"]
 
   validation {
     # A subject that does not start with repo: would match subjects from other

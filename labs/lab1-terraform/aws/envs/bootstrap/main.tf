@@ -44,7 +44,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Repository = "my-canon"
+      Repository = "my-canon-kernel"
       Root       = "aws/envs/bootstrap"
       ManagedBy  = "terraform"
     }

@@ -46,7 +46,7 @@ provider "aws" {
   # property of the CALLER and a module must be correct on its own.
   default_tags {
     tags = {
-      Repository = "my-canon"
+      Repository = "my-canon-kernel"
       Root       = "aws/envs/dev"
     }
   }

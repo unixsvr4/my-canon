@@ -47,7 +47,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Repository = "my-canon"
+      Repository = "my-canon-kernel"
       Root       = "lab2-ansible/aws"
       Purpose    = "kernel-role-reboot-test"
     }
